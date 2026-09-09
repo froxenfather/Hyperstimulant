@@ -26,7 +26,7 @@ public class PlayerLook : MonoBehaviour
         transform.Rotate(Vector3.up * mouseX);
 
         verticalRotation -= mouseY;
-        verticalRotation = Mathf.Clamp(verticalRotation, -90f, 90f);
+        verticalRotation = Mathf.Clamp(verticalRotation, -89f, 89f);
 
         cameraPivot.localRotation = Quaternion.Euler(verticalRotation, 0f, 0f);
     }
