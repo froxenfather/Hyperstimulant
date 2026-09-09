@@ -3,9 +3,14 @@ using UnityEngine.InputSystem;
 
 public class PlayerMovement : MonoBehaviour
 {
+    [Header("Movement")]
     [SerializeField] private float moveSpeed = 5f;
     [SerializeField] private float jumpVelocity = 5f;
-    [SerializeField] private float groundCheckDistance = 1.1f;
+    [SerializeField] private float extraGravity = 9.81f;
+    [SerializeField] private float airControl = 2f;
+
+    [Header("Ground Check")]
+    [SerializeField] private LayerMask groundLayer;
 
     private Rigidbody rb;
     private BoxCollider boxCollider;
@@ -29,6 +34,7 @@ public class PlayerMovement : MonoBehaviour
     {
         CheckGround();
         Move();
+        ApplyExtraGravity();
         Jump();
     }
 
@@ -56,12 +62,12 @@ public class PlayerMovement : MonoBehaviour
 
     private void CheckGround()
     {
-        float distanceToFeet = boxCollider.bounds.extents.y + 0.1f;
+        float rayDistance = boxCollider.bounds.extents.y + 0.1f;
 
         grounded = Physics.Raycast(
-            transform.position,
+            boxCollider.bounds.center,
             Vector3.down,
-            distanceToFeet
+            rayDistance
         );
     }
 
@@ -71,13 +77,22 @@ public class PlayerMovement : MonoBehaviour
             transform.forward * moveInput.y +
             transform.right * moveInput.x;
 
-        Vector3 targetVelocity = moveDirection * moveSpeed;
+        if (grounded)
+        {
+            // grounded: we have full authority over horizontal velocity
+            Vector3 targetVelocity = moveDirection * moveSpeed;
 
-        rb.linearVelocity = new Vector3(
-            targetVelocity.x,
-            rb.linearVelocity.y,
-            targetVelocity.z
-        );
+            rb.linearVelocity = new Vector3(
+                targetVelocity.x,
+                rb.linearVelocity.y,
+                targetVelocity.z
+            );
+        }
+        else
+        {
+            // airborne: preserve launch / jump momentum, allow only light steering
+            rb.AddForce(moveDirection * airControl, ForceMode.Acceleration);
+        }
     }
 
     private void Jump()
@@ -92,5 +107,11 @@ public class PlayerMovement : MonoBehaviour
         }
 
         jumpPressed = false;
+    }
+
+    private void ApplyExtraGravity()
+    {
+        if (!grounded)
+            rb.AddForce(Vector3.down * extraGravity, ForceMode.Acceleration);
     }
 }
