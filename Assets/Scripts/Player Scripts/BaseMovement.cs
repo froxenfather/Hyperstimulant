@@ -8,21 +8,20 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField] private float jumpVelocity = 5f;
     [SerializeField] private float extraGravity = 9.81f;
     [SerializeField] private float airControl = 2f;
-
-    [Header("Ground Check")]
-    [SerializeField] private LayerMask groundLayer;
+    [SerializeField] private float maxAirSpeed = 8f;
 
     private Rigidbody rb;
-    private BoxCollider boxCollider;
 
     private Vector2 moveInput;
     private bool jumpPressed;
     private bool grounded;
 
+    private Rigidbody supportBody;
+    private Vector3 supportVelocity;
+
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        boxCollider = GetComponent<BoxCollider>();
     }
 
     private void Update()
@@ -32,7 +31,6 @@ public class PlayerMovement : MonoBehaviour
 
     private void FixedUpdate()
     {
-        CheckGround();
         Move();
         ApplyExtraGravity();
         Jump();
@@ -54,21 +52,10 @@ public class PlayerMovement : MonoBehaviour
         if (Keyboard.current.aKey.isPressed)
             moveInput.x -= 1f;
 
-        if (Keyboard.current.spaceKey.isPressed)
+        if (Keyboard.current.spaceKey.wasPressedThisFrame)
             jumpPressed = true;
 
         moveInput = moveInput.normalized;
-    }
-
-    private void CheckGround()
-    {
-        float rayDistance = boxCollider.bounds.extents.y + 0.1f;
-
-        grounded = Physics.Raycast(
-            boxCollider.bounds.center,
-            Vector3.down,
-            rayDistance
-        );
     }
 
     private void Move()
@@ -79,19 +66,47 @@ public class PlayerMovement : MonoBehaviour
 
         if (grounded)
         {
-            // grounded: we have full authority over horizontal velocity
-            Vector3 targetVelocity = moveDirection * moveSpeed;
+            Vector3 playerVelocity = moveDirection * moveSpeed;
+
+            Vector3 finalVelocity =
+                playerVelocity +
+                supportVelocity;
 
             rb.linearVelocity = new Vector3(
-                targetVelocity.x,
+                finalVelocity.x,
                 rb.linearVelocity.y,
-                targetVelocity.z
+                finalVelocity.z
             );
         }
         else
         {
-            // airborne: preserve launch / jump momentum, allow only light steering
-            rb.AddForce(moveDirection * airControl, ForceMode.Acceleration);
+            rb.AddForce(
+                moveDirection * airControl,
+                ForceMode.Acceleration
+            );
+
+            LimitAirSpeed();
+        }
+    }
+
+    private void LimitAirSpeed()
+    {
+        Vector3 horizontalVelocity = new Vector3(
+            rb.linearVelocity.x,
+            0f,
+            rb.linearVelocity.z
+        );
+
+        if (horizontalVelocity.magnitude > maxAirSpeed)
+        {
+            horizontalVelocity =
+                horizontalVelocity.normalized * maxAirSpeed;
+
+            rb.linearVelocity = new Vector3(
+                horizontalVelocity.x,
+                rb.linearVelocity.y,
+                horizontalVelocity.z
+            );
         }
     }
 
@@ -104,6 +119,10 @@ public class PlayerMovement : MonoBehaviour
                 jumpVelocity,
                 rb.linearVelocity.z
             );
+
+            grounded = false;
+            supportBody = null;
+            supportVelocity = Vector3.zero;
         }
 
         jumpPressed = false;
@@ -112,6 +131,45 @@ public class PlayerMovement : MonoBehaviour
     private void ApplyExtraGravity()
     {
         if (!grounded)
-            rb.AddForce(Vector3.down * extraGravity, ForceMode.Acceleration);
+        {
+            rb.AddForce(
+                Vector3.down * extraGravity,
+                ForceMode.Acceleration
+            );
+        }
+    }
+
+    private void OnCollisionStay(Collision collision)
+    {
+        grounded = false;
+        supportBody = null;
+        supportVelocity = Vector3.zero;
+
+        foreach (ContactPoint contact in collision.contacts)
+        {
+            if (contact.normal.y > 0.5f)
+            {
+                grounded = true;
+
+                supportBody = collision.rigidbody;
+
+                if (supportBody != null)
+                {
+                    supportVelocity = supportBody.GetPointVelocity(contact.point);
+                }
+
+                return;
+            }
+        }
+    }
+
+    private void OnCollisionExit(Collision collision)
+    {
+        if (collision.rigidbody == supportBody)
+        {
+            supportBody = null;
+            supportVelocity = Vector3.zero;
+            grounded = false;
+        }
     }
 }

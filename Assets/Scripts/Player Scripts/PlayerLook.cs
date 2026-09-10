@@ -11,6 +11,7 @@ public class PlayerLook : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
+        Debug.Log("PlayerLook running");
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
     }
