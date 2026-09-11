@@ -277,7 +277,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: '::'
   launchForward: 5
-  launchUp: 52.4
+  launchUp: 30
 --- !u!1 &91953728
 GameObject:
   m_ObjectHideFlags: 0
@@ -789,15 +789,15 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 450152358}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.0011015572, y: -0.00017306878, z: -0.0014054623, w: 0.9999984}
-  m_LocalPosition: {x: -0.0044980436, y: 0.000010251999, z: 0.0035241684}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: -0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1839950789}
   - {fileID: 62238683}
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: -0.126, y: -0.02, z: -0.161}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &450152360
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -820,7 +820,7 @@ Rigidbody:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 450152358}
   serializedVersion: 5
-  m_Mass: 10
+  m_Mass: 1
   m_LinearDamping: 0
   m_AngularDamping: 0.05
   m_CenterOfMass: {x: 0, y: 0, z: 0}
@@ -872,16 +872,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d4e59b544d665b14ab9a69f1af6d5e1b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
-  walkSpeed: 12
-  sprintSpeed: 18
-  groundAccel: 67
-  groundOverspeedDecel: 10
-  groundFriction: 20
-  landingGrace: 0.2
-  jumpVelocity: 10
-  extraGravity: 15
-  airControl: 20
-  maxAirSpeed: 20
+  moveSpeed: 39.1
+  jumpVelocity: 15.4
+  extraGravity: 9.81
+  airControl: 13
+  maxAirSpeed: 38.3
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -1308,7 +1303,7 @@ BoxCollider:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1878660404}
-  m_Material: {fileID: 0}
+  m_Material: {fileID: 13400000, guid: c23da6ede8d71024291be3087581f622, type: 2}
   m_IncludeLayers:
     serializedVersion: 2
     m_Bits: 0

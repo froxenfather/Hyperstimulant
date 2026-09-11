@@ -3,18 +3,27 @@ using UnityEngine.InputSystem;
 
 public class PlayerMovement : MonoBehaviour
 {
+    [Header("Ground Movement")]
+    [SerializeField] private float walkSpeed = 5.5f; //soft walk speed cap
+    [SerializeField] private float sprintSpeed = 7.5f; //soft sprint speed cap
+    [SerializeField] private float groundAccel = 55f;  // ramp toward target when under it
+    [SerializeField] private float groundOverspeedDecel = 12f; // gentle skid toward target when over it (arrived hot)
+    [SerializeField] private float groundFriction = 120f; // no input -> decelerate VERY quickly, near-instant stop
+    [SerializeField] private float landingGrace = 0.15f; // after touching ground, suppress friction this long so momentum carries (bhop window)
+
     [Header("Movement")]
-    [SerializeField] private float moveSpeed = 5f;
     [SerializeField] private float jumpVelocity = 5f;
     [SerializeField] private float extraGravity = 9.81f;
     [SerializeField] private float airControl = 2f;
     [SerializeField] private float maxAirSpeed = 8f;
 
     private Rigidbody rb;
-
     private Vector2 moveInput;
     private bool jumpPressed;
+    private bool sprinting;
     private bool grounded;
+    private bool wasGrounded;
+    private float landTime = -999f;
 
     private Rigidbody supportBody;
     private Vector3 supportVelocity;
@@ -55,6 +64,8 @@ public class PlayerMovement : MonoBehaviour
         if (Keyboard.current.spaceKey.wasPressedThisFrame)
             jumpPressed = true;
 
+        sprinting = Keyboard.current.leftShiftKey.isPressed;
+
         moveInput = moveInput.normalized;
     }
 
@@ -66,10 +77,48 @@ public class PlayerMovement : MonoBehaviour
 
         if (grounded)
         {
-            Vector3 playerVelocity = moveDirection * moveSpeed;
+            if (!wasGrounded)
+                landTime = Time.time;
+
+            bool inLandingGrace = Time.time - landTime < landingGrace;
+
+            // Work in support-relative space so moving platforms still carry us.
+            Vector3 relVel = rb.linearVelocity - supportVelocity;
+            Vector3 horiz = new Vector3(relVel.x, 0f, relVel.z);
+
+            float targetSpeed = sprinting ? sprintSpeed : walkSpeed;
+            bool hasInput = moveInput.sqrMagnitude > 0.0001f;
+
+            if (hasInput)
+            {
+                Vector3 targetVel = moveDirection * targetSpeed;
+
+                // Gentler rate when we're already over target (came in hot from a
+                // boost / air landing) than when accelerating up to it.
+                float rate = horiz.magnitude > targetSpeed
+                    ? groundOverspeedDecel
+                    : groundAccel;
+
+                horiz = Vector3.MoveTowards(
+                    horiz,
+                    targetVel,
+                    rate * Time.fixedDeltaTime
+                );
+            }
+            else if (!inLandingGrace)
+            {
+                // High groundFriction -> decelerates very quickly to a stop
+                // (near-instant, but still frame-rate independent). Suppressed
+                // during the landing grace window so jump momentum carries.
+                horiz = Vector3.MoveTowards(
+                    horiz,
+                    Vector3.zero,
+                    groundFriction * Time.fixedDeltaTime
+                );
+            }
 
             Vector3 finalVelocity =
-                playerVelocity +
+                new Vector3(horiz.x, relVel.y, horiz.z) +
                 supportVelocity;
 
             rb.linearVelocity = new Vector3(
@@ -87,8 +136,9 @@ public class PlayerMovement : MonoBehaviour
 
             LimitAirSpeed();
         }
+        wasGrounded = grounded;
     }
-
+    
     private void LimitAirSpeed()
     {
         Vector3 horizontalVelocity = new Vector3(
