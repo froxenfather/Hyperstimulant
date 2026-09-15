@@ -28,7 +28,14 @@
 ## 9/10/2026
 - MASSIVE updates to movement, Insane progress on "feel" and jumping, All future movements will take Custom Controller
 - as i attempt to move away from rigidbody
+
 ## 9/11/2026
 - Completed all of Week 2 Syllabus Items!
 - Added a lot more terrarin to my world!
 - Made "stairs"
+
+## 9/14/2026
+- Implemented IPowered Class Interface
+- This class allows me to "Power" and "Unpower" objects that inherit it
+- A classic door was made, allowing me to "power" and open the door using a pressure plate
+- I plan on making "IInteractable" which will prompt the player to press a key to use to open the doors and such
