@@ -12,18 +12,36 @@ public class Exp13_RampComparisonTest : MonoBehaviour
     {
         Vector3 origin = rayOrigin != null ? rayOrigin.position : transform.position;
 
-        // TODO: raycast down onto this ramp, get its normal + slope angle,
-        // and project a test movement vector onto its surface.
-        // Pseudocode:
-        //   if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, maxDistance))
-        //   {
-        //       float slopeAngle = Vector3.Angle(hit.normal, Vector3.up);
-        //       Vector3 projectedMovement = Vector3.ProjectOnPlane(testMovementDirection, hit.normal).normalized;
-        //
-        //       Debug.DrawRay(origin, Vector3.down * hit.distance, Color.yellow);
-        //       Debug.DrawRay(hit.point, hit.normal * 2f, Color.green);
-        //       Debug.DrawRay(hit.point, projectedMovement * 2f, Color.magenta);
-        //       Debug.Log($"{name}: slope={slopeAngle:F1} deg");
-        //   }
+        // 1. Fire a raycast straight down from origin out to maxDistance
+        if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, maxDistance))
+        {
+            // 2. Find the angle between the hit normal and world up (Vector3.up)
+            // Vector3.Angle returns a positive float value in degrees (0 to 180)
+            float slopeAngle = Vector3.Angle(hit.normal, Vector3.up);
+
+            // 3. Project testMovementDirection onto the surface plane, and normalize the result
+            Vector3 projectedDirection = Vector3.ProjectOnPlane(testMovementDirection, hit.normal);
+            Vector3 normalizedProjectedDirection = projectedDirection.normalized;
+
+            // 4. Draw the downward ray out to the hit distance (White)
+            Debug.DrawLine(origin, hit.point, Color.white);
+
+            // 5. Draw the surface normal from the hit point (Green)
+            // Extended by 2 units so it stands out visibly from the surface
+            Debug.DrawRay(hit.point, hit.normal * 2f, Color.green);
+
+            // 6. Draw the projected movement direction from the hit point (Cyan/Blue)
+            // Extended by 2 units so you can see the direction it points down/up the slope
+            Debug.DrawRay(hit.point, normalizedProjectedDirection * 2f, Color.cyan);
+
+            // 7. Log this ramp's name alongside its computed slope angle
+            // Uses hit.transform.name to get the specific ramp it struck
+            Debug.Log($"[{hit.transform.name}] Computed Slope Angle: {slopeAngle:F1}°");
+        }
+        else
+        {
+            // Optional: Draw a red line if the setup is too high and misses the ramp entirely
+            Debug.DrawRay(origin, Vector3.down * maxDistance, Color.red);
+        }
     }
 }

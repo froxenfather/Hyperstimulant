@@ -3,7 +3,7 @@ using UnityEngine.InputSystem;
 
 // Learning Objective: understand the difference between a continuous Force,
 // an instant Impulse, and directly setting velocity.
-// Controls: Space = up force, F = forward force, G = forward impulse, R = reset.
+// Controls: Up arrow = up force, Left arrow = forward force, Right arrow = forward impulse, Down arrow = reset.
 public class Exp01_ForceVsImpulse : MonoBehaviour
 {
     [Header("Force Settings")]
@@ -24,28 +24,34 @@ public class Exp01_ForceVsImpulse : MonoBehaviour
 
     private void Update()
     {
-        if (Keyboard.current.spaceKey.wasPressedThisFrame)
+        if (Keyboard.current.upArrowKey.isPressed)
         {
-            // TODO: apply an upward CONTINUOUS force (ForceMode.Force).
+            // TODO: apply an upward CONTINUOUS force.
             // Pseudocode:
-            //   rb.AddForce(Vector3.up * upwardForce, ForceMode.Force);
+            //   - add a force to the rigidbody, pointing straight up, scaled by upwardForce
+            //   - use the force mode meant for something applied over time, not an instant kick
+            rb.AddForce(Vector3.up * upwardForce, ForceMode.Force);
         }
 
-        if (Keyboard.current.fKey.isPressed)
+        if (Keyboard.current.leftArrowKey.isPressed)
         {
             // TODO: apply a forward CONTINUOUS force, every frame it's held.
             // Pseudocode:
-            //   rb.AddForce(transform.forward * forwardForce, ForceMode.Force);
+            //   - same idea as above, but pointing in the object's forward direction
+            //   - since this block runs every frame the key is held, the force builds up over time
+            rb.AddForce(transform.forward * forwardForce, ForceMode.Force);
         }
 
-        if (Keyboard.current.gKey.wasPressedThisFrame)
+        if (Keyboard.current.rightArrowKey.wasPressedThisFrame)
         {
-            // TODO: apply a forward INSTANT impulse (ForceMode.Impulse).
+            // TODO: apply a forward INSTANT impulse.
             // Pseudocode:
-            //   rb.AddForce(transform.forward * forwardImpulse, ForceMode.Impulse);
+            //   - add a force to the rigidbody in the forward direction, scaled by forwardImpulse
+            //   - use the force mode meant for an instant momentum change, applied once
+            rb.AddForce(transform.forward * forwardImpulse, ForceMode.Impulse);
         }
 
-        if (Keyboard.current.rKey.wasPressedThisFrame)
+        if (Keyboard.current.downArrowKey.wasPressedThisFrame)
         {
             ResetCube();
         }
@@ -55,9 +61,12 @@ public class Exp01_ForceVsImpulse : MonoBehaviour
     {
         // TODO: reset position, rotation, and velocity so the test can repeat cleanly.
         // Pseudocode:
-        //   transform.position = startPosition;
-        //   transform.rotation = startRotation;
-        //   rb.linearVelocity = Vector3.zero;
-        //   rb.angularVelocity = Vector3.zero;
+        //   - put the transform's position and rotation back to the values saved in Awake
+        //   - clear both linear and angular velocity on the rigidbody, otherwise it'll
+        //     snap back but keep flying
+        transform.position = startPosition;
+        transform.rotation = startRotation;
+        rb.linearVelocity =  Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
     }
 }

@@ -14,6 +14,16 @@ public class Exp12_DragAndDeceleration : MonoBehaviour
     {
         rb = GetComponent<Rigidbody>();
     }
+    
+    private void Start()
+    {
+        Invoke(nameof(Push), 5f);
+    }
+
+    private void Push()
+    {
+        rb.AddForce(Vector3.forward * 10f, ForceMode.Impulse);
+    }
 
     private void FixedUpdate()
     {
@@ -23,15 +33,25 @@ public class Exp12_DragAndDeceleration : MonoBehaviour
         {
             // TODO: apply a force opposing current velocity to slow down manually.
             // Pseudocode:
-            //   Vector3 opposingForce = -rb.linearVelocity.normalized * manualDecelForce;
-            //   rb.AddForce(opposingForce, ForceMode.Force);
+            //   - get the current velocity's direction (normalized), and flip it (negate it)
+            //     to get the opposing direction
+            //   - add a force in that opposing direction, scaled by manualDecelForce, using
+            //     the continuous force mode
+            
+            Vector3 opposing = -rb.linearVelocity.normalized;
+            rb.AddForce(opposing * manualDecelForce, ForceMode.Force);
         }
 
         if (Keyboard.current.digit3Key.isPressed)
         {
             // TODO: directly manipulate velocity toward zero (no forces involved).
             // Pseudocode:
-            //   rb.linearVelocity = Vector3.MoveTowards(rb.linearVelocity, Vector3.zero, directVelocityDecelRate * Time.fixedDeltaTime);
+            //   - there's a Vector3 method that moves a value toward a target by a fixed
+            //     step per call. Use it to move the rigidbody's velocity toward zero, at a
+            //     rate of directVelocityDecelRate per second (multiply by fixed delta time
+            //     for a frame-rate independent step)
+            //   - assign the result back to the rigidbody's velocity
+            rb.linearVelocity = Vector3.MoveTowards(rb.linearVelocity, Vector3.zero, directVelocityDecelRate * Time.fixedDeltaTime);
         }
     }
 }

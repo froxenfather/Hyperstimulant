@@ -38,7 +38,13 @@ public class Exp09_SurfaceRelativeMovement : MonoBehaviour
 
         // TODO: project rawDirection onto the surface, normalize it, then set velocity.
         // Pseudocode:
-        //   Vector3 surfaceDirection = Vector3.ProjectOnPlane(rawDirection, hit.normal).normalized;
-        //   rb.linearVelocity = surfaceDirection * moveSpeed;
+        //   - project rawDirection onto the plane defined by hit.normal (same idea as Exp08)
+        //   - normalize the result - without this, speed would change with slope angle,
+        //     which isn't what we want
+        //   - set the rigidbody's velocity to that normalized direction scaled by moveSpeed
+        Vector3 slopeDirection = Vector3.ProjectOnPlane(rawDirection, hit.normal);
+        Vector3 normalizedSlopeDirection = slopeDirection.normalized;
+        Debug.DrawRay(transform.position, normalizedSlopeDirection * 2f, Color.blue);
+        rb.linearVelocity = normalizedSlopeDirection * moveSpeed;
     }
 }

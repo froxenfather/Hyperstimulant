@@ -4,6 +4,7 @@ using UnityEngine;
 // it isn't an instantly-applied speed.
 public class Exp11_GravityAndFalling : MonoBehaviour
 {
+    [SerializeField] float fallingLeeway;
     private Rigidbody rb;
     private float fallStartTime;
     private bool wasFalling;
@@ -15,12 +16,18 @@ public class Exp11_GravityAndFalling : MonoBehaviour
 
     private void Update()
     {
-        // TODO: track vertical velocity and how long the object has been falling.
-        // Pseudocode:
-        //   float verticalVelocity = rb.linearVelocity.y;
-        //   bool isFalling = verticalVelocity < -0.01f;
-        //   if (isFalling && !wasFalling) fallStartTime = Time.time;
-        //   if (isFalling) Debug.Log($"falling. vY={verticalVelocity}, elapsed={Time.time - fallStartTime}");
-        //   wasFalling = isFalling;
+        float yVelocity = rb.linearVelocity.y;
+        bool isFalling = yVelocity < -fallingLeeway;
+
+        if (isFalling && !wasFalling)
+            fallStartTime = Time.time;
+
+        if (isFalling)
+        {
+            Debug.Log("falling at speed " + yVelocity);
+            Debug.Log("Time since fall started " + (Time.time - fallStartTime));
+        }
+
+        wasFalling = isFalling;
     }
 }

@@ -15,14 +15,15 @@ public class Exp02_VelocityAndMagnitude : MonoBehaviour
 
     private void Update()
     {
-        // TODO: read the rigidbody's velocity and its magnitude, then log them.
-        // Pseudocode:
-        //   Vector3 velocity = rb.linearVelocity;
-        //   float speed = velocity.magnitude;
-        //   Debug.Log($"velocity: {velocity}  speed: {speed}");
+        Vector3 rbVelocity =  rb.linearVelocity;
+        float magnitude = rbVelocity.magnitude;
+        Debug.Log("Object Vector" + rbVelocity);
+        Debug.Log("Magnitude: " + magnitude);
 
         // TODO: draw the velocity vector as a ray from this object's position.
         // Pseudocode:
-        //   Debug.DrawRay(transform.position, velocity * rayScale, Color.red);
+        //   - draw a ray starting at the object's position, pointing along the
+        //     velocity vector (scaled by rayScale so it's visible), in red
+        Debug.DrawRay(transform.position, rbVelocity * rayScale, Color.red);
     }
 }
