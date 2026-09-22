@@ -23,11 +23,12 @@ public class Exp10_SphereCast : MonoBehaviour
         // TODO: visualize both casts.
         // Pseudocode:
         //   - draw the raycast as a line in one color
+        
+        if (sphereHit)
+            Debug.DrawLine(transform.position, sHit.point, Color.red);
         if (rayHit)
             Debug.DrawLine(transform.position, hit.point, Color.blue);
         //   - (spherecasts don't have a built-in debug draw - comparing the two Hit booleans
         //     in the Console, especially right at an edge, is enough to see the difference)
-        if (sphereHit)
-            Debug.DrawLine(transform.position, sHit.point, Color.red);
     }
 }

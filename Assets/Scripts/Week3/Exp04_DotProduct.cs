@@ -27,11 +27,14 @@ public class Exp04_DotProduct : MonoBehaviour
         Debug.Log("DotProduct: " + dot);
 
         // TODO (Homework Task): classify the target using dot thresholds you choose.
-        // Pseudocode:
-        //   - pick two threshold values between -1 and 1 (you decide what feels right)
-        //   - if the dot is above the high threshold, the target counts as in front
-        //   - if it's below the low threshold, the target counts as behind
-        //   - otherwise, it counts as to the side
-        //   - log which category it landed in
+        float inFrontThreshold = 0.5f;
+        float behindThreshold = -0.5f;
+
+        Facing facing;
+        if (dot > inFrontThreshold) facing = Facing.InFront;
+        else if (dot < behindThreshold) facing = Facing.Behind;
+        else facing = Facing.ToTheSide;
+
+        Debug.Log("Facing: " + facing);
     }
 }

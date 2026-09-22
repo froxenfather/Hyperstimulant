@@ -51,6 +51,7 @@ public class Exp07_SurfaceNormals : MonoBehaviour
             Debug.DrawRay(hitPoint, intoSurfacePart * velocityDrawScale, Color.red);       // Into-Surface
             Debug.DrawRay(hitPoint, alongSurfacePart * velocityDrawScale, Color.blue);     // Along-Surface
             Debug.DrawRay(hitPoint, bouncePart * velocityDrawScale, Color.green);         // Bounce
+            Debug.DrawRay(origin, direction * maxDistance, Color.white);
 
             // 8. Log the length of the into-surface part (impact speed) and the along-surface part (slide speed)
             float impactSpeed = Mathf.Abs(intoNormalMagnitude); // Using absolute value as magnitude for speed scalar

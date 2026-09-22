@@ -7,6 +7,7 @@ public class Exp09_SurfaceRelativeMovement : MonoBehaviour
 {
     [SerializeField] private float moveSpeed = 4f;
     [SerializeField] private float maxDistance = 5f;
+    [SerializeField] private float groundedDistance = 0.3f;
 
     private Rigidbody rb;
     private Vector2 moveInput;
@@ -19,16 +20,19 @@ public class Exp09_SurfaceRelativeMovement : MonoBehaviour
     private void Update()
     {
         moveInput = Vector2.zero;
-        if (Keyboard.current.wKey.isPressed) moveInput.y += 1f;
-        if (Keyboard.current.sKey.isPressed) moveInput.y -= 1f;
-        if (Keyboard.current.dKey.isPressed) moveInput.x += 1f;
-        if (Keyboard.current.aKey.isPressed) moveInput.x -= 1f;
+        if (Keyboard.current.upArrowKey.isPressed) moveInput.y += 1f;
+        if (Keyboard.current.downArrowKey.isPressed) moveInput.y -= 1f;
+        if (Keyboard.current.rightArrowKey.isPressed) moveInput.x += 1f;
+        if (Keyboard.current.leftArrowKey.isPressed) moveInput.x -= 1f;
     }
 
     private void FixedUpdate()
     {
         if (!Physics.Raycast(transform.position, Vector3.down, out RaycastHit hit, maxDistance))
             return;
+
+        if (hit.distance > groundedDistance)
+            return; // too far below to count as standing on it — let gravity fall normally
 
         Vector3 rawDirection =
             transform.forward * moveInput.y +
@@ -45,6 +49,10 @@ public class Exp09_SurfaceRelativeMovement : MonoBehaviour
         Vector3 slopeDirection = Vector3.ProjectOnPlane(rawDirection, hit.normal);
         Vector3 normalizedSlopeDirection = slopeDirection.normalized;
         Debug.DrawRay(transform.position, normalizedSlopeDirection * 2f, Color.blue);
-        rb.linearVelocity = normalizedSlopeDirection * moveSpeed;
+
+        if (moveInput.sqrMagnitude > 0.0001f)
+        {
+            rb.linearVelocity = normalizedSlopeDirection * moveSpeed;
+        }
     }
 }

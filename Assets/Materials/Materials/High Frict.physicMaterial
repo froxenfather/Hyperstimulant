@@ -8,8 +8,8 @@ PhysicsMaterial:
   m_PrefabAsset: {fileID: 0}
   m_Name: High Frict
   serializedVersion: 2
-  m_DynamicFriction: 2.43
-  m_StaticFriction: 1.98
+  m_DynamicFriction: 5.39
+  m_StaticFriction: 5.1
   m_Bounciness: 1
   m_FrictionCombine: 0
   m_BounceCombine: 0

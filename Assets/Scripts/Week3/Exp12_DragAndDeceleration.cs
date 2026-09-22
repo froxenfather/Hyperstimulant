@@ -53,5 +53,7 @@ public class Exp12_DragAndDeceleration : MonoBehaviour
             //   - assign the result back to the rigidbody's velocity
             rb.linearVelocity = Vector3.MoveTowards(rb.linearVelocity, Vector3.zero, directVelocityDecelRate * Time.fixedDeltaTime);
         }
+        if (rb.linearVelocity.magnitude > 0.1f)
+            Debug.unityLogger.Log("LinearVelocity: " + rb.linearVelocity);
     }
 }

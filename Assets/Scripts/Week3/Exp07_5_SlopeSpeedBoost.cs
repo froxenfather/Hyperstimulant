@@ -34,32 +34,41 @@ public class Exp07_5_SlopeSpeedBoost : MonoBehaviour
             grounded = false;
         }
 
-        // TODO: apply gravity to velocity and predict the next position (same as Exp16).
-        // Pseudocode:
-        //   - add a downward amount to velocity, proportional to gravity and deltaTime
-        //   - calculate where the object would end up if it moved by velocity * deltaTime
+        velocity += Vector3.down * gravity * Time.deltaTime;
+        Vector3 nextPosition = transform.position + velocity * Time.deltaTime;
 
-        // TODO: raycast down. On the frame it hits, convert impact speed into flat boost.
-        // Pseudocode:
-        //   - raycast straight down out to groundCheckDistance plus skinWidth
-        //   - if it hits:
-        //       1. impact speed: take the dot product of velocity and the hit normal.
-        //          It's negative when moving into the surface, so flip its sign
-        //          (ignore the hit if it isn't moving into the surface at all)
-        //       2. tangential velocity: subtract (dot result * normal) from velocity.
-        //          This is the momentum already running along the ramp
-        //       3. slope angle: the angle between the normal and world up, in degrees
-        //       4. steepness factor: sample slopeBoostCurve at the slope angle
-        //       5. flat downhill direction: project world down onto the surface plane,
-        //          zero out its y, then normalize
-        //       6. bonus speed = impact speed * steepness factor * boostMultiplier
-        //       7. new velocity = the tangential velocity with its y zeroed, plus the
-        //          flat downhill direction scaled by the bonus
-        //       - snap the predicted position's height to just above the hit point
-        //         (plus skinWidth), and mark grounded
-        //       - log impact speed, slope angle, and bonus so you can compare ramps
-        //   - if it doesn't hit: mark grounded false
-        //   - apply the predicted position to the transform
+        if (Physics.Raycast(transform.position, Vector3.down, out RaycastHit hit, groundCheckDistance + skinWidth))
+        {
+            float impactSpeed = -Vector3.Dot(velocity, hit.normal);
+
+            if (impactSpeed > 0f)
+            {
+                Vector3 tangential = velocity - (Vector3.Dot(velocity, hit.normal) * hit.normal);
+                float slopeAngle = Vector3.Angle(hit.normal, Vector3.up);
+                float steepnessFactor = slopeBoostCurve.Evaluate(slopeAngle);
+
+                Vector3 flatDownhill = Vector3.ProjectOnPlane(Vector3.down, hit.normal);
+                flatDownhill.y = 0f;
+                flatDownhill = flatDownhill.normalized;
+
+                float bonus = impactSpeed * steepnessFactor * boostMultiplier;
+
+                Vector3 tangentialFlat = tangential;
+                tangentialFlat.y = 0f;
+                velocity = tangentialFlat + flatDownhill * bonus;
+
+                Debug.Log($"impact: {impactSpeed:F2}  slope: {slopeAngle:F1} deg  bonus: {bonus:F2}");
+            }
+
+            nextPosition.y = hit.point.y + skinWidth;
+            grounded = true;
+        }
+        else
+        {
+            grounded = false;
+        }
+
+        transform.position = nextPosition;
 
         Debug.DrawRay(transform.position, velocity, grounded ? Color.cyan : Color.red);
     }

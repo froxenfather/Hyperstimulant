@@ -10,13 +10,20 @@ public class Exp17_ManualForceAndImpulse : MonoBehaviour
     [SerializeField] private float upwardAcceleration = 15f;
     [SerializeField] private float jumpImpulseSpeed = 6f;
     [SerializeField] private float gravity = 9.81f;
+    [SerializeField] private float skinWidth = 0.05f;
+    [SerializeField] private float groundCheckDistance = 0.2f;
 
     private Vector3 velocity;
     private Vector3 startPosition;
+    private bool grounded;
+    private float halfHeight;
 
     private void Awake()
     {
         startPosition = transform.position;
+
+        Renderer rend = GetComponentInChildren<Renderer>();
+        halfHeight = rend != null ? rend.bounds.extents.y : 0f;
     }
 
     private void Update()
@@ -27,25 +34,35 @@ public class Exp17_ManualForceAndImpulse : MonoBehaviour
             velocity = Vector3.zero;
         }
 
-        // TODO: "continuous force" - held key adds acceleration * deltaTime every frame.
-        // Pseudocode:
-        //   - while the space key is held down, add an upward amount to velocity each
-        //     frame, proportional to upwardAcceleration and deltaTime (it builds up the
-        //     longer it's held)
+        if (Keyboard.current.upArrowKey.isPressed)
+            velocity += Vector3.up * upwardAcceleration * Time.deltaTime;
 
-        // TODO: "impulse" - one tap adds a fixed velocity change instantly, once.
-        // Pseudocode:
-        //   - on the single frame the G key is first pressed, add a fixed upward amount
-        //     to velocity all at once, based on jumpImpulseSpeed (no deltaTime here -
-        //     it's an instant change, not something that builds up)
+        if (Keyboard.current.gKey.wasPressedThisFrame)
+            velocity += Vector3.up * jumpImpulseSpeed;
 
-        // TODO: gravity still needs to be integrated every frame, same as Exp15/16.
-        // Pseudocode:
-        //   - add a downward amount to velocity, proportional to gravity and deltaTime
+        velocity += Vector3.down * gravity * Time.deltaTime;
 
-        // TODO: apply the accumulated velocity to position.
-        // Pseudocode:
-        //   - move the transform's position by velocity, scaled by deltaTime
+        Vector3 nextPosition = transform.position + velocity * Time.deltaTime;
+        Vector3 feetPosition = transform.position + Vector3.down * halfHeight;
+
+        // Scale how far we look for ground by how far we're about to fall this
+        // frame - a fixed small window can't catch a fast fall before it
+        // overshoots, which is what causes the "snap" onto the surface.
+        float fallDistanceThisFrame = Mathf.Max(-velocity.y * Time.deltaTime, 0f);
+        float castDistance = Mathf.Max(groundCheckDistance, fallDistanceThisFrame) + skinWidth;
+
+        if (velocity.y <= 0f && Physics.Raycast(feetPosition, Vector3.down, out RaycastHit hit, castDistance))
+        {
+            grounded = true;
+            nextPosition.y = hit.point.y + halfHeight + skinWidth;
+            velocity.y = 0f;
+        }
+        else
+        {
+            grounded = false;
+        }
+
+        transform.position = nextPosition;
 
         Debug.DrawRay(transform.position, velocity, Color.red);
     }

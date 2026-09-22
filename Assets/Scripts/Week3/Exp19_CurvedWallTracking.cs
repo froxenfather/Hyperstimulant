@@ -40,15 +40,17 @@ public class Exp19_CurvedWallTracking : MonoBehaviour
         // transform.forward points at the cylinder. Detach: press E.
         if (!attached && Keyboard.current.spaceKey.wasPressedThisFrame)
         {
-            // TODO: find the wall to attach to.
-            // Pseudocode:
-            //   - spherecast from this object's position along transform.forward,
-            //     using castRadius and castDistance
-            //   - if it hits: store the hit normal as lastNormal and mark attached
-            //   - pick the initial run direction: cross of world up and lastNormal,
-            //     then flip it if needed so it points the way this object is
-            //     roughly facing (hint: dot it against transform.forward)
-            //   - set velocity to that direction scaled by runSpeed
+            if (Physics.SphereCast(transform.position, castRadius, transform.forward, out RaycastHit attachHit, castDistance))
+            {
+                lastNormal = attachHit.normal;
+                attached = true;
+
+                Vector3 tangent = Vector3.Cross(Vector3.up, lastNormal);
+                if (Vector3.Dot(tangent, transform.forward) < 0f)
+                    tangent = -tangent;
+
+                velocity = tangent.normalized * runSpeed;
+            }
         }
 
         if (Keyboard.current.eKey.wasPressedThisFrame)
@@ -59,38 +61,34 @@ public class Exp19_CurvedWallTracking : MonoBehaviour
 
         if (!attached) return;
 
-        // TODO: re-cast toward the wall every frame to get the CURRENT normal.
-        // Pseudocode:
-        //   - spherecast from the current position along the NEGATIVE of lastNormal
-        //     (that is: into the wall), using castRadius and castDistance
-        //   - if nothing is hit: mark detached and stop this frame's update
-        //   - if it hits: overwrite lastNormal with the new hit normal
-        //   - also verify the wall is roughly vertical (angle between the normal and
-        //     world up close to 90 degrees) - detach if it isn't
+        if (!Physics.SphereCast(transform.position, castRadius, -lastNormal, out RaycastHit hit, castDistance))
+        {
+            attached = false;
+            return;
+        }
 
-        // TODO: keep the run direction along the wall as the normal rotates.
-        // Pseudocode:
-        //   - remember the current speed (velocity magnitude) BEFORE changing velocity
-        //   - project velocity onto the plane defined by the new normal
-        //   - normalize the projected result to get a pure direction
-        //   - if preserveSpeed is on, scale it back up to the remembered speed;
-        //     if it's off, scale by whatever length the projection left you with
-        //   - assign that back to velocity
+        lastNormal = hit.normal;
 
-        // TODO: optional stick force that keeps you on the curve.
-        // Pseudocode:
-        //   - if useStickForce is on: add an inward pull to velocity along the
-        //     negative normal, proportional to speed squared and stickStrength,
-        //     multiplied by delta time (tuning tip: start small, since larger
-        //     speeds make speed-squared grow fast)
-        //   - if it is off, skip this and watch what happens on a tight cylinder
+        if (Vector3.Angle(lastNormal, Vector3.up) < 45f)
+        {
+            attached = false;
+            return;
+        }
 
-        // TODO: move, and hold the correct distance from the wall.
-        // Pseudocode:
-        //   - move the transform's position by velocity scaled by delta time
-        //   - optionally correct the position so its distance from the surface stays
-        //     at wallOffset (use the hit distance from the recast to work out how far
-        //     to nudge along the normal)
+        float speed = velocity.magnitude;
+        Vector3 projected = Vector3.ProjectOnPlane(velocity, lastNormal);
+        Vector3 direction = projected.normalized;
+        velocity = preserveSpeed ? direction * speed : projected;
+
+        if (useStickForce)
+        {
+            velocity += -lastNormal * (velocity.sqrMagnitude * stickStrength * 0.01f) * Time.deltaTime;
+        }
+
+        transform.position += velocity * Time.deltaTime;
+
+        float distanceError = hit.distance - wallOffset;
+        transform.position += -lastNormal * distanceError;
 
         Debug.DrawRay(transform.position, lastNormal * 2f, Color.green);   // wall normal
         Debug.DrawRay(transform.position, velocity, Color.red);            // velocity

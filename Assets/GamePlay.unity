@@ -1786,7 +1786,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: '::'
   openAngle: 90
-  rotationSpeed: 90
+  rotationSpeed: 123.5
 --- !u!4 &1197734163 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 6907254832632435643, guid: a0a534fde1a3c084f8d418198807b268, type: 3}

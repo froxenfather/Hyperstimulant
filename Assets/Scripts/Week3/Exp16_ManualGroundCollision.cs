@@ -14,10 +14,16 @@ public class Exp16_ManualGroundCollision : MonoBehaviour
     private Vector3 velocity;
     private Vector3 startPosition;
     private bool grounded;
+    private float halfHeight;
 
     private void Awake()
     {
         startPosition = transform.position;
+
+        // im a fucking GOD bro this makes the raycast start at thge
+        // actual bottom, not its pivot - works for any object size, nmanual "height" number to keep in sync.
+        Renderer rend = GetComponentInChildren<Renderer>();
+        halfHeight = rend != null ? rend.bounds.extents.y : 0f;
     }
 
     private void Update()
@@ -28,24 +34,24 @@ public class Exp16_ManualGroundCollision : MonoBehaviour
             velocity = Vector3.zero;
         }
 
-        // TODO: apply gravity to velocity, same as Exp15.
-        // Pseudocode:
-        //   - add a downward amount to velocity, proportional to gravity and deltaTime
+        velocity += Vector3.down * gravity * Time.deltaTime;
 
-        // TODO: raycast downward. If the ground is within reach, snap the
-        // object to the surface (plus skinWidth) and zero out downward
-        // velocity instead of letting it pass through.
-        // Pseudocode:
-        //   - calculate where the object WOULD end up this frame if it just moved by
-        //     velocity * deltaTime (don't apply it yet - check it first)
-        //   - raycast straight down from the current position, out to groundCheckDistance
-        //     plus skinWidth
-        //   - if it hits: mark grounded true, override the calculated position's height to
-        //     sit just above the hit point (using skinWidth as the buffer), and zero out
-        //     the downward component of velocity so it stops accumulating
-        //   - if it doesn't hit: mark grounded false and leave the calculated position alone
-        //   - finally, apply whichever position you ended up with to the transform
+        Vector3 nextPosition = transform.position + velocity * Time.deltaTime;
+        Vector3 feetPosition = transform.position + Vector3.down * halfHeight;
 
-        Debug.DrawRay(transform.position, Vector3.down * (groundCheckDistance + skinWidth), grounded ? Color.green : Color.red);
+        if (Physics.Raycast(feetPosition, Vector3.down, out RaycastHit hit, groundCheckDistance + skinWidth))
+        {
+            grounded = true;
+            nextPosition.y = hit.point.y + halfHeight + skinWidth;
+            velocity.y = 0f;
+        }
+        else
+        {
+            grounded = false;
+        }
+
+        transform.position = nextPosition;
+
+        Debug.DrawRay(feetPosition, Vector3.down * (groundCheckDistance + skinWidth), grounded ? Color.green : Color.red);
     }
 }

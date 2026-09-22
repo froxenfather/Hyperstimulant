@@ -17,7 +17,7 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField] private float airControl = 2f;
     [SerializeField] private float maxAirSpeed = 8f;
 
-    private Rigidbody rb;
+    private Rigidbody rb; 
     private Vector2 moveInput;
     private bool jumpPressed;
     private bool sprinting;

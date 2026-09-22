@@ -39,3 +39,11 @@
 - This class allows me to "Power" and "Unpower" objects that inherit it
 - A classic door was made, allowing me to "power" and open the door using a pressure plate
 - I plan on making "IInteractable" which will prompt the player to press a key to use to open the doors and such
+
+## 9/16/2026
+- Started week 3 experiments
+
+## 9/17/2026-9/20
+- Finished Scripting
+
+.

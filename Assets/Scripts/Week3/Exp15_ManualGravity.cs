@@ -25,14 +25,8 @@ public class Exp15_ManualGravity : MonoBehaviour
             velocity = Vector3.zero;
         }
 
-        // TODO: integrate gravity into velocity, then velocity into position.
-        // This is the same idea a Rigidbody does internally under the hood -
-        // here you're doing it by hand, one frame at a time.
-        // Pseudocode:
-        //   - add a downward amount to velocity, proportional to gravity and how
-        //     much time passed this frame (this is acceleration becoming velocity)
-        //   - move the transform's position by velocity, scaled by how much time
-        //     passed this frame (this is velocity becoming position)
+        velocity += Vector3.down * gravity * Time.deltaTime;
+        transform.position += velocity * Time.deltaTime;
 
         Debug.DrawRay(transform.position, velocity, Color.red);
     }
