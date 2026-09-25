@@ -1,0 +1,1255 @@
+using System.Collections.Generic;
+using IObjects;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+// Setup:
+// Kinematic Rigidbody + CapsuleCollider on Player root.
+// Feet are assumed to sit at the object's pivot.
+//
+// Controller philosophy:
+// - Rigidbody does NOT drive movement.
+// - We manually integrate velocity.
+// - Capsule sweeps detect collisions before movement.
+// - Collisions are resolved using "collide and slide".
+// - Kinematic Rigidbody mainly exists for:
+//      1. Trigger interactions
+//      2. Rigidbody interpolation
+//
+// This is essentially a custom kinetic character controller.
+
+// Ladies and Gentlemen
+// the FRAGNUM OPUS!
+[RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
+public class CustomPlayerController : MonoBehaviour
+{
+    [Header("Input")]
+    [SerializeField] private bool allowWASD = true;
+
+    [Header("Ground Movement")]
+    [SerializeField] private float walkSpeed = 12f;
+    [SerializeField] private float sprintSpeed = 20f;
+
+    // How quickly velocity approaches target movement speed.
+    [SerializeField] private float groundAccel = 90.9f;
+
+    // Deceleration when already moving faster than our desired speed.
+    [SerializeField] private float groundOverspeedDecel = 52.1f;
+
+    // Deceleration when no movement input is held.
+    [SerializeField] private float groundFriction = 68.6f;
+
+    // Brief friction-free window after landing.
+    // Lets momentum survive landings / allows bunny hopping.
+    [SerializeField] private float landingGrace = 0.04f;
+
+    [Header("Air Movement")]
+    [SerializeField] private float jumpVelocity = 14.68f;
+
+    // Downward acceleration in m/s^2.
+    [SerializeField] private float gravity = 30.01f;
+
+    // Horizontal acceleration while airborne.
+    [SerializeField] private float airControl = 15.22f;
+
+    // Prevent infinite horizontal air acceleration.
+    [SerializeField] private float maxAirSpeed = 20f;
+
+    [Header("Collision")]
+    [SerializeField] private LayerMask collisionMask = ~0;
+
+    // Small gap maintained between capsule and surfaces.
+    // Helps avoid floating point collision jitter.
+    [SerializeField] private float skinWidth = 0.03f;
+
+    [SerializeField] private float maxSlopeAngle = 60f;
+    [SerializeField] private float stepHeight = 0.4f;
+
+    // How far we try to "stick" downward while already grounded.
+    [SerializeField] private float groundSnapDistance = 0.3f;
+
+    // Small landing detection distance while airborne.
+    [SerializeField] private float groundProbeDistance = 0.05f;
+
+    // Uphill slopes above this angle can launch us when we leave them.
+    [SerializeField] private float launchSlopeAngle = 10f;
+
+    // Maximum collision-and-slide attempts in one FixedUpdate.
+    [SerializeField] private int maxBumps = 4;
+
+    [Header("Pushing Rigidbodies")]
+    [SerializeField] private float playerMass = 10f;
+    [SerializeField] private float pushStrength = 1f;
+
+    [Header("Debug")]
+    [SerializeField] private bool showDebugHUD = true;
+    [SerializeField] private bool drawDebugRays = true;
+
+    private Rigidbody rb;
+    private CapsuleCollider capsule;
+
+    // Custom authoritative player position.
+    // This is the position our controller actually reasons about.
+    private Vector3 position;
+
+    // Absolute world-space velocity.
+    private Vector3 velocity;
+
+    // Last position we told the Rigidbody to move toward.
+    // Used to detect external movement / teleports.
+    private Vector3 lastTarget;
+
+    // Velocity inherited from moving platforms.
+    private Vector3 currentPlatformVelocity;
+
+    private Vector2 moveInput;
+    private bool sprinting;
+    private bool jumpQueued;
+
+    private bool grounded;
+    private Vector3 groundNormal = Vector3.up;
+    private Collider groundCollider;
+    private float slopeAngle;
+    private float landTime = -999f;
+
+    // Minimum Y component a surface normal needs to count as walkable.
+    private float minGroundNormalY;
+
+    // Moving platform tracking.
+    private Transform platform;
+    private Vector3 platformLocalPos;
+    private Quaternion platformLastRot;
+
+    // Reused buffers avoid allocating straight garbage every physics frame.
+    private readonly RaycastHit[] hitBuffer = new RaycastHit[16];
+    private readonly Collider[] overlapBuffer = new Collider[16];
+
+    // Track collision contacts so events fire once on contact.
+    private readonly HashSet<Collider> contactsThisStep = new HashSet<Collider>();
+    private readonly HashSet<Collider> contactsLastStep = new HashSet<Collider>();
+
+    public Vector3 Velocity => velocity;
+    public bool IsGrounded => grounded;
+
+    private void Awake()
+    {
+        rb = GetComponent<Rigidbody>();
+        capsule = GetComponent<CapsuleCollider>();
+
+        // Rigidbody exists as a Unity physics shell.
+        // Our code remains responsible for actual movement.
+        
+        // better to set these here so we dont untick them ingame yknow?
+        rb.isKinematic = true;
+        rb.useGravity = false;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
+        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+
+        position = transform.position;
+        lastTarget = position;
+
+        // Math Time!
+        // Surface is walkable when:
+        //
+        // normal.y >= cos(maxSlopeAngle)
+        //
+        // Example:
+        // maxSlopeAngle = 60 degrees
+        // cos(60) = 0.5
+        //
+        // So any surface normal with y >= 0.5 is <= 60 degrees steep.
+        minGroundNormalY = Mathf.Cos(maxSlopeAngle * Mathf.Deg2Rad);
+    }
+
+    private void OnValidate()
+    {
+        // Recalculate immediately when changing slope angle in Inspector.
+        minGroundNormalY = Mathf.Cos(maxSlopeAngle * Mathf.Deg2Rad);
+    }
+
+    private void Update()
+    {
+        // Basic Movement
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null) return;
+
+        Vector2 input = Vector2.zero;
+
+        if (keyboard.upArrowKey.isPressed || (allowWASD && keyboard.wKey.isPressed))
+            input.y += 1f;
+
+        if (keyboard.downArrowKey.isPressed || (allowWASD && keyboard.sKey.isPressed))
+            input.y -= 1f;
+
+        if (keyboard.rightArrowKey.isPressed || (allowWASD && keyboard.dKey.isPressed))
+            input.x += 1f;
+
+        if (keyboard.leftArrowKey.isPressed || (allowWASD && keyboard.aKey.isPressed))
+            input.x -= 1f;
+
+        // So there was a funny bug at the start where diagonal movement was reasonably twice as fast as usual movement
+        // Prevent diagonal input from being faster than straight input.
+        //
+        // Without normalize:
+        // (1,1) magnitude = sqrt(2) ~= 1.414
+        //
+        // With normalize:
+        // magnitude = 1
+        moveInput = input.normalized;
+        // Normalizing the direction keeps speed precise!
+        sprinting = keyboard.leftShiftKey.isPressed;
+
+        // Queue jump here so FixedUpdate cannot miss a single-frame key press.
+        if (keyboard.spaceKey.wasPressedThisFrame)
+            jumpQueued = true;
+    }
+
+    private void FixedUpdate()
+    {
+        float dt = Time.fixedDeltaTime;
+
+        // If another system moved the Rigidbody unexpectedly,
+        // accept that new position instead of snapping back.
+        if ((rb.position - lastTarget).sqrMagnitude > 0.0004f)
+            position = rb.position;
+        // Helpful trigger for doors shoving you or platforms moving you!
+
+        // First inherit motion from whatever platform we stand on.
+        currentPlatformVelocity = ApplyPlatformCarry(dt);
+
+        // Fix any overlap caused by moving platforms, teleports, etc.
+        Depenetrate();
+
+        // Movement logic should happen RELATIVE to the platform.
+        //
+        // playerVelocity = relativeVelocity + platformVelocity
+        //
+        // Therefore:
+        //
+        // relativeVelocity = playerVelocity - platformVelocity
+        Vector3 calculatedMovement = velocity - currentPlatformVelocity;
+
+        bool startedGrounded = grounded;
+        bool leftGround = false;
+
+        if (jumpQueued && grounded)
+        {
+            // Jump is simply an immediate upward velocity assignment.
+            calculatedMovement.y = jumpVelocity;
+
+            grounded = false;
+            leftGround = true;
+        }
+
+        jumpQueued = false;
+
+        // Choose movement model based on grounded state.
+        calculatedMovement = grounded
+            ? GroundMove(calculatedMovement, dt)
+            : AirMove(calculatedMovement, dt);
+
+        // Position change:
+        //
+        // displacement = velocity * time
+        //
+        // x_new = x_old + v * dt
+        MoveAndSlide(calculatedMovement * dt, ref calculatedMovement, startedGrounded && !leftGround);
+
+        UpdateGrounded(startedGrounded, leftGround, calculatedMovement);
+
+        // Convert relative velocity back into world velocity.
+        velocity = calculatedMovement + currentPlatformVelocity;
+
+        DispatchContacts();
+        RecordPlatformAnchor();
+
+        lastTarget = position;
+
+        // Let Rigidbody interpolation visually smooth the custom position.
+        rb.MovePosition(position);
+
+        if (drawDebugRays)
+        {
+            // Green = ground normal.
+            Debug.DrawRay(
+                position + Vector3.up * 0.1f,
+                groundNormal * 1.5f,
+                Color.green
+            );
+
+            // Cyan = velocity.
+            Debug.DrawRay(
+                position + Vector3.up,
+                velocity * 0.15f,
+                Color.cyan
+            );
+        }
+    }
+
+    // ============================================================
+    // The Big MOVEMENT MODELS
+    // ============================================================
+
+    private Vector3 WishDirection()
+    {
+        // Movement relative to where the player is facing.
+        Vector3 forward = transform.forward;
+        forward.y = 0f;
+        forward.Normalize(); //gotta do this shit every time man
+
+        Vector3 right = transform.right;
+        right.y = 0f;
+        right.Normalize();
+
+        // WASD becomes a world-space direction.
+        return forward * moveInput.y + right * moveInput.x;
+    }
+
+    private Vector3 GroundMove(Vector3 rel, float dt)
+    {
+        Vector3 wish = WishDirection();
+
+        bool hasInput = wish.sqrMagnitude > 0.0001f;
+        bool inLandingGrace = Time.time - landTime < landingGrace;
+
+        float targetSpeed = sprinting
+            ? sprintSpeed // target speed depends on if im sprinting or not
+            : walkSpeed;
+
+        // Remove velocity pointing directly into/out of the ground.
+        
+        // Projection onto a plane:
+        // v_plane = v - n * dot(v, n)
+        // n = ground surface normal
+        // This leaves only velocity parallel to the ground.
+        Vector3 velPlane = Vector3.ProjectOnPlane(rel, groundNormal); //Take a look at week 3 exp 9! Super helpful dot product funtion
+
+        if (hasInput)
+        {
+            //Arguably the coolest and smoothest model I have here!
+            // Project desired movement onto the slope.
+            //
+            // This means "forward" becomes "forward along the ramp."
+            Vector3 planeDir =
+                Vector3.ProjectOnPlane(wish, groundNormal).normalized;
+
+            Vector3 targetVel = planeDir * targetSpeed;
+
+            // If above target speed, slow gently.
+            // Otherwise accelerate aggressively.
+            float rate =
+                velPlane.magnitude > targetSpeed
+                    ? groundOverspeedDecel
+                    : groundAccel;
+
+            // MoveTowards is effectively bounded acceleration:
+            // Its a unity function as well.
+            // deltaVelocity <= acceleration * dt
+            //
+            // v_new approaches targetVelocity gradually.
+            velPlane = Vector3.MoveTowards(
+                velPlane,
+                targetVel,
+                rate * dt
+            );
+        }
+        else if (!inLandingGrace)
+        {
+            // Friction is implemented as constant deceleration toward zero.
+            //
+            // v_new = MoveTowards(v, 0, friction * dt)
+            velPlane = Vector3.MoveTowards(
+                velPlane,
+                Vector3.zero,
+                groundFriction * dt
+            );
+        }
+
+        return velPlane;
+    }
+
+    private Vector3 AirMove(Vector3 calculated_movement, float dt)
+    {
+        // Air acceleration:
+        //
+        // deltaVelocity = acceleration * dt
+        //
+        // v_new = v_old + a * dt
+        calculated_movement += WishDirection() * airControl * dt;
+
+        Vector3 horizontal = new Vector3(
+            calculated_movement.x,
+            0f,
+            calculated_movement.z
+        );
+
+        // Clamp horizontal speed while preserving direction.
+        if (horizontal.magnitude > maxAirSpeed)
+        {
+            horizontal =
+                horizontal.normalized * maxAirSpeed;
+
+            calculated_movement.x = horizontal.x;
+            calculated_movement.z = horizontal.z;
+        }
+
+        // Gravity:
+        // Lets go back to phys 1 lol
+        // v = v0 + g * dt
+        //
+        // Downward direction makes acceleration negative in Y.
+        calculated_movement += Vector3.down * gravity * dt;
+        // Gotta be careful to not clamp gravity here!
+
+        return calculated_movement;
+    }
+
+    // ============================================================
+    // COLLISION
+    // ============================================================
+
+    private void GetCapsulePoints(
+        Vector3 pos,
+        out Vector3 p0,
+        out Vector3 p1,
+        out float radius)
+    {
+        Vector3 scale = transform.lossyScale;
+
+        // Capsule radius must account for object scaling.
+        radius = capsule.radius * Mathf.Max(scale.x, scale.z);
+
+        float height =
+            Mathf.Max(
+                capsule.height * scale.y,
+                radius * 2f
+            );
+
+        Vector3 center =
+            pos + Vector3.Scale(capsule.center, scale);
+
+        // Distance from capsule center to each sphere center.
+        float half = height * 0.5f - radius;
+
+        p0 = center + Vector3.down * half;
+        p1 = center + Vector3.up * half;
+    }
+
+    private bool IsSelf(Collider c)
+    {
+        // Ignore our own collider and child colliders.
+        return c == null ||
+               c == capsule ||
+               c.transform.IsChildOf(transform);
+    }
+
+    private bool SweepCapsule(
+        Vector3 pos,
+        Vector3 dir,
+        float dist,
+        out RaycastHit best)
+    {
+        best = default;
+
+        if (dist <= 0f)
+            return false;
+
+        GetCapsulePoints(
+            pos,
+            out Vector3 p0,
+            out Vector3 p1,
+            out float radius
+        );
+
+        // Sweep our capsule through space.
+        // Think "what would we hit if the player moved this direction?"
+        int count = Physics.CapsuleCastNonAlloc(
+            p0,
+            p1,
+            radius,
+            dir,
+            hitBuffer,
+            dist,
+            collisionMask,
+            QueryTriggerInteraction.Ignore
+        );
+
+        bool found = false;
+        float bestDist = float.MaxValue;
+
+        // CapsuleCastNonAlloc is not guaranteed to return sorted hits,
+        // so manually find the nearest collision.
+        for (int i = 0; i < count; i++)
+        {
+            RaycastHit h = hitBuffer[i];
+
+            if (IsSelf(h.collider))
+                continue;
+
+            // Weird zero-distance hits usually mean we already overlap.
+            // Depenetrate() handles those separately.
+            if (h.distance <= 0f && h.point == Vector3.zero)
+                continue;
+
+            if (h.distance < bestDist)
+            {
+                best = h;
+                bestDist = h.distance;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    // Capsule edges can produce misleading normals near corners.
+    // This attempts to retrieve the actual face normal instead.
+    private Vector3 ResolveGroundNormal(RaycastHit hit)
+    {
+        // Already walkable: trust the capsule result.
+        if (hit.normal.y >= minGroundNormalY)
+            return hit.normal;
+
+        // Ray straight downward from slightly above the contact.
+        Vector3 origin = hit.point + Vector3.up * 0.1f;
+
+        if (Physics.Raycast(
+                origin,
+                Vector3.down,
+                out RaycastHit rayHit,
+                0.2f,
+                collisionMask,
+                QueryTriggerInteraction.Ignore)
+            && rayHit.collider == hit.collider)
+        {
+            return rayHit.normal;
+        }
+
+        return hit.normal;
+    }
+
+    private void Depenetrate()
+    {
+        // Repeat a few times because resolving one overlap
+        // can sometimes push us into another surface.
+        for (int iteration = 0; iteration < 3; iteration++)
+        {
+            GetCapsulePoints(
+                position,
+                out Vector3 p0,
+                out Vector3 p1,
+                out float radius
+            );
+
+            int count = Physics.OverlapCapsuleNonAlloc(
+                p0,
+                p1,
+                radius,
+                overlapBuffer,
+                collisionMask,
+                QueryTriggerInteraction.Ignore
+            );
+
+            bool moved = false;
+
+            for (int i = 0; i < count; i++)
+            {
+                Collider other = overlapBuffer[i];
+
+                if (IsSelf(other))
+                    continue;
+
+                // ComputePenetration gives:
+                //
+                // direction = shortest escape direction
+                // distance  = how far we must move to exit overlap
+                if (Physics.ComputePenetration(
+                        capsule,
+                        position,
+                        transform.rotation,
+                        other,
+                        other.transform.position,
+                        other.transform.rotation,
+                        out Vector3 direction,
+                        out float distance))
+                {
+                    // Push ourselves barely outside the collider.
+                    position +=
+                        direction * (distance + 0.001f);
+
+                    moved = true;
+                }
+            }
+
+            if (!moved)
+                break;
+        }
+    }
+
+    // Core collide-and-slide algorithm.
+    //
+    // Basic idea:
+    //
+    // 1. Try moving.
+    // 2. Find first surface hit.
+    // 3. Move right up to it.
+    // 4. Remove movement INTO the wall.
+    // 5. Continue using the remaining sideways motion.
+    //
+    // Repeat several times for corners / multiple surfaces.
+    private void MoveAndSlide(
+        Vector3 motion,
+        ref Vector3 vel,
+        bool allowStep)
+    {
+        Vector3 remaining = motion;
+
+        Vector3 prevNormal = Vector3.zero;
+        bool hasPrev = false;
+
+        for (int bump = 0; bump < maxBumps; bump++)
+        {
+            float dist = remaining.magnitude;
+
+            if (dist < 0.0001f)
+                break;
+
+            Vector3 dir = remaining / dist;
+
+            // Nothing ahead: perform entire remaining movement.
+            if (!SweepCapsule(
+                    position,
+                    dir,
+                    dist + skinWidth,
+                    out RaycastHit hit))
+            {
+                position += remaining;
+                break;
+            }
+
+            contactsThisStep.Add(hit.collider);
+
+            // Move slightly short of the collision.
+            //
+            // dot(dir, normal) tells us how directly we're approaching the surface.
+            //
+            // Head-on collision:
+            // dot ~= -1
+            //
+            // Grazing collision:
+            // dot ~= 0
+            //
+            // More grazing -> slightly larger backoff needed.
+            float backOff =
+                Mathf.Min(
+                    skinWidth /
+                    Mathf.Max(
+                        0.05f,
+                        -Vector3.Dot(dir, hit.normal)
+                    ),
+                    skinWidth * 4f
+                );
+
+            float moveDist =
+                Mathf.Clamp(
+                    hit.distance - backOff,
+                    0f,
+                    dist
+                );
+
+            // Move as far as safely possible.
+            position += dir * moveDist;
+
+            // Keep whatever motion remains.
+            remaining =
+                dir * (dist - moveDist);
+
+            Rigidbody body =
+                hit.collider.attachedRigidbody;
+
+            bool dynamicBody =
+                body != null &&
+                !body.isKinematic;
+
+            if (dynamicBody)
+                PushBody(body, hit, dir, vel);
+
+            Vector3 n = hit.normal;
+
+            bool walkable =
+                n.y >= minGroundNormalY;
+
+            // Try stepping over low obstacles instead of sliding into them.
+            if (allowStep &&
+                !walkable &&
+                n.y > -0.1f &&
+                !dynamicBody &&
+                TryStepUp(ref remaining))
+            {
+                hasPrev = false;
+                continue;
+            }
+
+            // Surface faces upward but is too steep to walk on.
+            bool steepUpward =
+                !walkable &&
+                n.y > 0f;
+
+            // Slide equation:
+            //
+            // remaining_parallel =
+            // remaining - normal * dot(remaining, normal)
+            //
+            // The perpendicular "into wall" component disappears.
+            Vector3 slid =
+                Vector3.ProjectOnPlane(
+                    remaining,
+                    n
+                );
+
+            // Never magically climb walls that are too steep.
+            if (steepUpward && slid.y > 0f)
+                slid.y = 0f;
+
+            if (hasPrev &&
+                Vector3.Dot(slid, prevNormal) < -0.0001f)
+            {
+                // We hit two surfaces and are effectively wedged.
+                //
+                // Their cross product creates a vector pointing
+                // along the line where the two planes intersect.
+                //
+                // crease = n1 x n2
+                Vector3 crease =
+                    Vector3.Cross(
+                        prevNormal,
+                        n
+                    );
+
+                if (crease.sqrMagnitude > 0.000001f)
+                {
+                    crease.Normalize();
+
+                    // Only retain motion along the crease.
+                    slid =
+                        crease *
+                        Vector3.Dot(
+                            remaining,
+                            crease
+                        );
+
+                    vel =
+                        crease *
+                        Vector3.Dot(
+                            vel,
+                            crease
+                        );
+                }
+                else
+                {
+                    // Parallel/opposing planes:
+                    // nowhere meaningful left to move.
+                    slid = Vector3.zero;
+                    vel = Vector3.zero;
+                }
+            }
+            else if (Vector3.Dot(vel, n) < 0f)
+            {
+                // If velocity points INTO the wall,
+                // remove its wall-normal component.
+                vel =
+                    Vector3.ProjectOnPlane(
+                        vel,
+                        n
+                    );
+
+                if (steepUpward && vel.y > 0f)
+                    vel.y = 0f;
+            }
+
+            remaining = slid;
+
+            prevNormal = n;
+            hasPrev = true;
+        }
+    }
+
+    private bool TryStepUp(ref Vector3 remaining)
+    {
+        Vector3 horizontal =
+            new Vector3(
+                remaining.x,
+                0f,
+                remaining.z
+            );
+
+        float hDist =
+            horizontal.magnitude;
+
+        if (hDist < 0.0001f)
+            return false;
+
+        Vector3 hDir =
+            horizontal / hDist;
+
+        // Step test is basically:
+        //
+        // 1. Can I move UP?
+        // 2. Can I move FORWARD?
+        // 3. Can I move DOWN onto walkable ground?
+
+        // --------------------
+        // 1. MOVE UP
+        // --------------------
+
+        float up = stepHeight;
+
+        if (SweepCapsule(
+                position,
+                Vector3.up,
+                up + skinWidth,
+                out RaycastHit upHit))
+        {
+            up =
+                Mathf.Max(
+                    upHit.distance - skinWidth,
+                    0f
+                );
+        }
+
+        if (up < 0.02f)
+            return false;
+
+        Vector3 raised =
+            position + Vector3.up * up;
+
+        // --------------------
+        // 2. MOVE FORWARD
+        // --------------------
+
+        float forward =
+            Mathf.Max(
+                hDist,
+                0.05f
+            );
+
+        if (SweepCapsule(
+                raised,
+                hDir,
+                forward + skinWidth,
+                out RaycastHit fwdHit))
+        {
+            forward =
+                Mathf.Max(
+                    fwdHit.distance - skinWidth,
+                    0f
+                );
+        }
+
+        if (forward < 0.01f)
+            return false;
+
+        Vector3 forwardPos =
+            raised + hDir * forward;
+
+        // --------------------
+        // 3. DROP DOWN
+        // --------------------
+
+        if (!SweepCapsule(
+                forwardPos,
+                Vector3.down,
+                up + skinWidth * 3f,
+                out RaycastHit downHit))
+        {
+            return false;
+        }
+
+        // Must land on a walkable surface.
+        if (ResolveGroundNormal(downHit).y < minGroundNormalY)
+            return false;
+
+        float dropped =
+            Mathf.Max(
+                downHit.distance - skinWidth,
+                0f
+            );
+
+        // Actual height of the step:
+        //
+        // gainedHeight = amountRaised - amountDropped
+        float gained =
+            up - dropped;
+
+        if (gained < 0.01f ||
+            gained > stepHeight + 0.01f)
+        {
+            return false;
+        }
+
+        position =
+            forwardPos +
+            Vector3.down * dropped;
+
+        // Preserve whatever forward motion remains.
+        remaining =
+            hDir *
+            Mathf.Max(
+                hDist - forward,
+                0f
+            );
+
+        return true;
+    }
+
+    private void UpdateGrounded(
+        bool startedGrounded,
+        bool leftGround,
+        Vector3 rel)
+    {
+        bool wasGrounded =
+            startedGrounded &&
+            !leftGround;
+
+        float previousSlope =
+            slopeAngle;
+
+        // Assume airborne until proven grounded.
+        grounded = false;
+        groundCollider = null;
+        groundNormal = Vector3.up;
+        slopeAngle = 0f;
+
+        // Jump explicitly disables grounding this frame.
+        if (leftGround)
+            return;
+
+        // Ramp launching:
+        //
+        // If our slope-projected velocity points upward and
+        // the old slope was sufficiently steep, we should
+        // continue through the air instead of being snapped downward.
+        bool launching =
+            wasGrounded &&
+            rel.y > 0.05f &&
+            previousSlope >= launchSlopeAngle;
+
+        bool snapping =
+            wasGrounded &&
+            !launching;
+
+        // Since the capsule touches angled ground at an offset,
+        // skinWidth / normal.y roughly converts the desired
+        // perpendicular skin gap into the needed vertical clearance.
+        float castDist =
+            skinWidth / minGroundNormalY +
+            groundProbeDistance +
+            (snapping ? groundSnapDistance : 0f);
+
+        if (!SweepCapsule(
+                position,
+                Vector3.down,
+                castDist,
+                out RaycastHit hit))
+        {
+            return;
+        }
+
+        Vector3 n =
+            ResolveGroundNormal(hit);
+
+        // Too steep to stand on.
+        if (n.y < minGroundNormalY)
+            return;
+
+        // dot(rel, n) > 0 means velocity is moving AWAY
+        // from the surface along its normal.
+        //
+        // So don't instantly reground while launching.
+        if (!snapping &&
+            Vector3.Dot(rel, n) > 0.1f)
+        {
+            return;
+        }
+
+        // Move downward until maintaining our skin gap.
+        float snap =
+            hit.distance -
+            skinWidth /
+            Mathf.Max(n.y, 0.5f);
+
+        if (snap > 0.002f)
+            position +=
+                Vector3.down * snap;
+
+        grounded = true;
+        groundNormal = n;
+        groundCollider = hit.collider;
+
+        // Angle between surface normal and straight up.
+        //
+        // Flat floor:
+        // angle(up, up) = 0 degrees
+        //
+        // Vertical wall:
+        // angle(sideways, up) = 90 degrees
+        slopeAngle =
+            Vector3.Angle(
+                n,
+                Vector3.up
+            );
+
+        contactsThisStep.Add(hit.collider);
+
+        // Record exact landing time for bunny-hop friction grace.
+        if (!wasGrounded)
+            landTime = Time.time;
+    }
+
+    // ============================================================
+    // PUSHING
+    // ============================================================
+
+    private void PushBody(
+        Rigidbody body,
+        RaycastHit hit,
+        Vector3 moveDir,
+        Vector3 vel)
+    {
+        // Only push horizontally.
+        Vector3 pushDir =
+            new Vector3(
+                moveDir.x,
+                0f,
+                moveDir.z
+            );
+
+        if (pushDir.sqrMagnitude < 0.000001f)
+            return;
+
+        pushDir.Normalize();
+
+        Vector3 playerVelocity =
+            vel + currentPlatformVelocity;
+
+        // Relative closing velocity:
+        //
+        // closingSpeed =
+        // dot(playerVelocity - objectVelocity, pushDirection)
+        //
+        // Positive means we're moving INTO the object.
+        float closing =
+            Vector3.Dot(
+                playerVelocity -
+                body.GetPointVelocity(hit.point),
+                pushDir
+            );
+
+        if (closing <= 0f)
+            return;
+
+        // Reduced mass:
+        //
+        // μ = (m1 * m2) / (m1 + m2)
+        //
+        // This gives realistic collision response between
+        // two objects of different mass.
+        float reducedMass =
+            (playerMass * body.mass) /
+            (playerMass + body.mass);
+
+        // Impulse:
+        //
+        // J = μ * relativeVelocity
+        //
+        // Impulse changes momentum immediately:
+        //
+        // J = Δp = m * Δv
+        body.AddForceAtPosition(
+            pushDir *
+            (
+                reducedMass *
+                closing *
+                pushStrength
+            ),
+            hit.point,
+            ForceMode.Impulse
+        );
+    }
+
+    // ============================================================
+    // MOVING PLATFORMS
+    // ============================================================
+
+    private Vector3 ApplyPlatformCarry(float dt)
+    {
+        if (platform == null ||
+            !platform.gameObject.activeInHierarchy)
+        {
+            platform = null;
+            return Vector3.zero;
+        }
+
+        // Only inherit yaw from mostly upright platforms.
+        if (Vector3.Dot(
+                platform.up,
+                Vector3.up) > 0.7f)
+        {
+            // Rotation since last frame:
+            //
+            // deltaRotation =
+            // currentRotation * inverse(previousRotation)
+            Quaternion rotDelta =
+                platform.rotation *
+                Quaternion.Inverse(platformLastRot);
+
+            float yaw =
+                Mathf.DeltaAngle(
+                    0f,
+                    rotDelta.eulerAngles.y
+                );
+
+            if (Mathf.Abs(yaw) > 0.0001f)
+            {
+                transform.Rotate(
+                    0f,
+                    yaw,
+                    0f,
+                    Space.World
+                );
+            }
+        }
+
+        // platformLocalPos stores our anchor relative to the platform.
+        //
+        // TransformPoint converts that old local anchor into
+        // its NEW world position.
+        //
+        // Therefore:
+        //
+        // platformDelta =
+        // newAnchorWorldPosition - playerPosition
+        Vector3 delta =
+            platform.TransformPoint(platformLocalPos)
+            - position;
+
+        if (delta.sqrMagnitude < 0.0000000001f)
+            return Vector3.zero;
+
+        Vector3 discard = Vector3.zero;
+
+        // Carry us with the platform while still respecting collision.
+        MoveAndSlide(
+            delta,
+            ref discard,
+            false
+        );
+
+        // Velocity equation:
+        //
+        // velocity = displacement / time
+        //
+        // v = Δx / Δt
+        return delta / dt;
+    }
+
+    private void RecordPlatformAnchor()
+    {
+        Rigidbody body =
+            grounded && groundCollider != null
+                ? groundCollider.attachedRigidbody
+                : null;
+
+        if (body == null)
+        {
+            platform = null;
+            return;
+        }
+
+        platform = body.transform;
+
+        // Convert player world position into platform-local coordinates.
+        //
+        // This anchor will move naturally when the
+        // platform translates or rotates.
+        platformLocalPos =
+            platform.InverseTransformPoint(position);
+
+        platformLastRot =
+            platform.rotation;
+    }
+
+    // ============================================================
+    // CONTACTS / EXTERNAL CONTROL
+    // ============================================================
+
+    private void DispatchContacts()
+    {
+        foreach (Collider c in contactsThisStep)
+        {
+            if (c == null ||
+                contactsLastStep.Contains(c))
+            {
+                continue;
+            }
+
+            // Only fire contact when first touching the object.
+            if (c.TryGetComponent(out IPlayerContact receiver))
+                receiver.OnPlayerContact(this);
+        }
+
+        // Current contacts become next frame's previous contacts.
+        contactsLastStep.Clear();
+
+        foreach (Collider c in contactsThisStep)
+            contactsLastStep.Add(c);
+
+        contactsThisStep.Clear();
+    }
+
+    public void SetVelocity(Vector3 worldVelocity)
+    {
+        // External systems like launch pads can directly set velocity.
+        velocity = worldVelocity;
+
+        grounded = false;
+        platform = null;
+    }
+
+    public void Teleport(Vector3 worldPosition)
+    {
+        // Synchronize every representation of position
+        // so the controller doesn't snap back afterward.
+        position = worldPosition;
+        lastTarget = worldPosition;
+
+        velocity = Vector3.zero;
+
+        grounded = false;
+        platform = null;
+
+        rb.position = worldPosition;
+        transform.position = worldPosition;
+    }
+
+    private void OnGUI()
+    {
+        if (!showDebugHUD)
+            return;
+
+        Vector3 flat =
+            new Vector3(
+                velocity.x,
+                0f,
+                velocity.z
+            );
+
+        GUI.Label(
+            new Rect(10f, 10f, 420f, 140f),
+            $"speed: {velocity.magnitude:F1}   horizontal: {flat.magnitude:F1}\n" +
+            $"velocity: {velocity}\n" +
+            $"grounded: {grounded}   slope: {slopeAngle:F0} deg\n" +
+            $"platform: {(platform != null ? platform.name : "none")}"
+        );
+    }
+}

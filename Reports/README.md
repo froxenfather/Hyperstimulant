@@ -46,4 +46,6 @@
 ## 9/17/2026-9/20
 - Finished Scripting
 
-.
+## 9/21/2026
+- Evil Script from Hell!
+- Finished Creation of objects in game.
