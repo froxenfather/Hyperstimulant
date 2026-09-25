@@ -55,6 +55,34 @@ public class CustomPlayerController : MonoBehaviour
     // Prevent infinite horizontal air acceleration.
     [SerializeField] private float maxAirSpeed = 20f;
 
+    // How fast horizontal speed bleeds off when above maxAirSpeed.
+    // High = acts like a hard clamp, low = momentum carries through the air.
+    [SerializeField] private float airOverspeedDecel = 52.1f;
+
+    [Header("Slide")]
+    // Friction while sliding. Way lower than groundFriction so momentum carries.
+    [SerializeField] private float slidingGroundFriction = 4f;
+
+    // Speed added the moment a slide starts...
+    [SerializeField] private float slideBoost = 5f;
+
+    // ...but only if we're going slower than this. So the most a boost can ever give is about this + slideBoost.
+    [Range(0f, 60f)]
+    [SerializeField] private float slideBoostMaxSpeed = 25f;
+
+    // Can't start a slide slower than this, and a slide dies on the ground below it.
+    [SerializeField] private float slideMinSpeed = 5f;
+
+    // Multiplier on gravity pulling us along a slope while sliding. 1 = plain g * sin(angle).
+    [SerializeField] private float slideSlopeGravityScale = 1f;
+
+    // One shared timer, counted from the start of a slide:
+    // no new slide can start before it runs out, and a jump inside it is a slide jump.
+    [SerializeField] private float slideGrace = 0.5f;
+
+    // Extra horizontal speed a slide jump gives.
+    [SerializeField] private float slideJumpBoost = 8f;
+
     [Header("Collision")]
     [SerializeField] private LayerMask collisionMask = ~0;
 
@@ -136,6 +164,15 @@ public class CustomPlayerController : MonoBehaviour
     private bool sprinting;
     private bool jumpQueued;
 
+    // Flat speed we had when we left the ground. Air control can't push us past it.
+    private float airSpeedCap;
+
+    // Slide state.
+    private bool sliding;
+    private bool slideQueued;
+    private bool slideHeld;
+    private float slideStartTime = -999f;
+
     private bool grounded;
     private Vector3 groundNormal = Vector3.up;
     private Collider groundCollider;
@@ -160,6 +197,10 @@ public class CustomPlayerController : MonoBehaviour
 
     public Vector3 Velocity => velocity;
     public bool IsGrounded => grounded;
+    public bool IsSliding => sliding;
+
+    // Flat speed relative to whatever we're standing on, so riding a fast platform doesn't count as running.
+    public float HorizontalSpeed => Flatten(velocity - currentPlatformVelocity).magnitude;
 
     // ============================================================
     // UNITY MESSAGES
@@ -213,6 +254,12 @@ public class CustomPlayerController : MonoBehaviour
         Vector3 calculatedMovement = velocity - currentPlatformVelocity;
 
         bool startedGrounded = grounded;
+
+        // Remember our takeoff speed every step we spend on the ground.
+        // Whenever we leave it (jump, ledge, launch), the last value stays as the air cap.
+        // Walk speed is the floor so a standing jump can still reach walking speed.
+        if (startedGrounded)
+            airSpeedCap = Mathf.Max(walkSpeed, Flatten(calculatedMovement).magnitude);
 
         // 1. Change velocity.
         // Leaving the ground can happen two ways: we jump, or the ground launches us.
@@ -335,6 +382,16 @@ public class CustomPlayerController : MonoBehaviour
         // Queue jump here so FixedUpdate cannot miss a single-frame key press.
         if (keyboard.spaceKey.wasPressedThisFrame)
             jumpQueued = true;
+
+        // Slide is on either thumb button of the mouse. Same queue trick as jump for the press,
+        // and a plain "is it down" for holding the slide.
+        Mouse mouse = Mouse.current;
+        if (mouse == null) return;
+
+        slideHeld = mouse.backButton.isPressed || mouse.forwardButton.isPressed;
+
+        if (mouse.backButton.wasPressedThisFrame || mouse.forwardButton.wasPressedThisFrame)
+            slideQueued = true;
     }
 
     // ============================================================
@@ -389,15 +446,49 @@ public class CustomPlayerController : MonoBehaviour
         return false;
     }
 
-    // WIP: sliding belongs to Week 7. Nothing happens here yet.
+    // Decides whether we are sliding this step. (The actual sliding physics comes in later stages.)
     //
     // Plan:
-    // - Start a slide when crouch is pressed, we are grounded, and we are fast enough.
+    // - Start a slide when the button is pressed, we are grounded, and we are fast enough.
     // - Lower friction while sliding, but keep the momentum we came in with.
     // - Speed up going downhill, slow down going uphill.
     // - Let the player jump out of the slide (slide jump).
     private void Slide(ref Vector3 calculatedMovement, float dt)
     {
+        bool slidePressed = slideQueued;
+
+        // Used up either way, same as the jump press.
+        slideQueued = false;
+
+        float flatSpeed = Flatten(calculatedMovement).magnitude;
+
+        if (!sliding)
+        {
+            // TODO 1 Start Slide
+            //
+            // Pseudocode:
+            // - A slide starts only when ALL of these are true:
+            //     * the slide button was just pressed
+            //     * we are on the ground
+            //     * we are moving fast enough (slideMinSpeed)
+            //     * enough time has passed since the LAST slide started (slideGrace)
+            // - When it starts, remember it: turn sliding on, and store the time it began (slideStartTime).
+            //
+            // Hint: same shape as the multi-line if in TryStepUp. Time.time is the clock.
+        }
+        else
+        {
+            // TODO 2 End Slide
+            //
+            // Pseudocode:
+            // - The slide ends if EITHER of these is true:
+            //     * the button is no longer held (slideHeld)
+            //     * we are on the ground AND slower than slideMinSpeed
+            // - Ending it is just turning sliding back off.
+            //
+            // Question to think about: why "on the ground AND slower"? What would happen if we
+            // ended the slide for being slow while still in the air?
+        }
     }
 
     // Choose movement model based on grounded state.
@@ -492,14 +583,32 @@ public class CustomPlayerController : MonoBehaviour
         // deltaVelocity = acceleration * dt
         //
         // v_new = v_old + a * dt
+        float speedBeforeAccel = Flatten(calculatedMovement).magnitude;
+
         calculatedMovement += WishDirection() * airControl * dt;
 
         Vector3 horizontal = Flatten(calculatedMovement);
 
-        // Clamp horizontal speed while preserving direction.
+        // Being midair should never speed us up.
+        // Air control can turn and brake us, but not push us past the speed we took off with.
+        // (If we are already faster than that, say from a launch pad, we just can't get any faster.)
+        float airSpeedLimit = Mathf.Max(speedBeforeAccel, airSpeedCap);
+
+        if (horizontal.magnitude > airSpeedLimit)
+        {
+            horizontal = horizontal.normalized * airSpeedLimit;
+
+            calculatedMovement.x = horizontal.x;
+            calculatedMovement.z = horizontal.z;
+        }
+
+        // Over the limit: slow down gradually toward maxAirSpeed, keeping direction.
+        // MoveTowards never goes past maxAirSpeed, so this can't undershoot.
         if (horizontal.magnitude > maxAirSpeed)
         {
-            horizontal = horizontal.normalized * maxAirSpeed;
+            float slowedSpeed = Mathf.MoveTowards(horizontal.magnitude, maxAirSpeed, airOverspeedDecel * dt);
+
+            horizontal = horizontal.normalized * slowedSpeed;
 
             calculatedMovement.x = horizontal.x;
             calculatedMovement.z = horizontal.z;
@@ -1239,10 +1348,11 @@ public class CustomPlayerController : MonoBehaviour
             platformName = platform.name;
 
         GUI.Label(
-            new Rect(10f, 10f, 420f, 140f),
+            new Rect(10f, 10f, 420f, 160f),
             $"speed: {velocity.magnitude:F1}   horizontal: {horizontalVelocity.magnitude:F1}\n" +
             $"velocity: {velocity}\n" +
             $"grounded: {grounded}   slope: {slopeAngle:F0} deg\n" +
+            $"sliding: {sliding}\n" +
             $"platform: {platformName}"
         );
     }
