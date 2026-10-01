@@ -79,8 +79,14 @@ public class CustomPlayerController : MonoBehaviour
     // slow drift, not steering like regular ground movement. W/S do nothing at all while sliding.
     [SerializeField] private float slideSteerAccel = 10f;
 
-    // Multiplier on gravity pulling us along a slope while sliding. 1 = plain g * sin(angle).
+    // Multiplier on gravity pulling us DOWN a slope while sliding. 1 = plain g * sin(angle).
     [SerializeField] private float slideSlopeGravityScale = 1f;
+
+    // Same, but for slowing us down going UP a slope. Lower than slideSlopeGravityScale on purpose:
+    // full gravity uphill kills speed just as hard as it builds it downhill, which eats the exact
+    // momentum you need to carry over a lip and launch. Feel over realism.
+    [Range(0f, 1f)]
+    [SerializeField] private float slideUphillGravityScale = 0.35f;
 
     // One shared timer, counted from the start of a slide:
     // no new slide can start before it runs out, and a jump inside it is a slide jump.
@@ -680,9 +686,18 @@ public class CustomPlayerController : MonoBehaviour
         // Steer left/right while sliding: only moveInput.x matters, no forward/back from W/S.
         // Added straight into velocityAlongGround like air control - a nudge over time,
         // not a snap to a target speed.
+        float speedBeforeSteer = velocityAlongGround.magnitude;
+
         Vector3 right = Flatten(transform.right).normalized;
         velocityAlongGround += right * moveInput.x * slideSteerAccel * dt;
-        
+
+        // Steering can only turn us, never speed us up - same idea as AirMove's airSpeedCap.
+        // Capping against speedBeforeSteer (not some fixed number) means this can't be used to
+        // climb from a dead stop back up to speed either - 0 can only clamp back down to 0.
+        if (velocityAlongGround.magnitude > speedBeforeSteer)
+            velocityAlongGround = velocityAlongGround.normalized * speedBeforeSteer;
+
+
         // Pseudocode:
         // - Find "downhill": project Vector3.down onto the ground plane (Vector3.ProjectOnPlane)
         //   and normalize it. This points down the slope we're standing on.
@@ -695,8 +710,13 @@ public class CustomPlayerController : MonoBehaviour
 
         Vector3 downhill = Vector3.ProjectOnPlane(Vector3.down, groundNormal).normalized;
 
-        velocityAlongGround += downhill * gravity * Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * slideSlopeGravityScale * dt;
-        
+        // Moving against downhill means we're climbing - that case gets its own, gentler scale
+        // (see slideUphillGravityScale) instead of reusing the downhill one for both directions.
+        bool movingUphill = Vector3.Dot(velocityAlongGround, downhill) < 0f;
+        float slopeScale = movingUphill ? slideUphillGravityScale : slideSlopeGravityScale;
+
+        velocityAlongGround += downhill * gravity * Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * slopeScale * dt;
+
         // Slide friction always applies, on top of everything above - this is what finally
         // brings a slide to a stop (very slowly, since slidingGroundFriction is low).
         velocityAlongGround = Vector3.MoveTowards(velocityAlongGround, Vector3.zero, slidingGroundFriction * dt);
@@ -1048,17 +1068,40 @@ public class CustomPlayerController : MonoBehaviour
         if (steepUpward && slidMotion.y > 0f)
             slidMotion.y = 0f;
 
+        // A floor seaming into a walkable ramp (or ramp into another ramp) registers as TWO hits in
+        // one step - the old surface's edge, then the new one - which looks like being wedged in a
+        // corner even though it's still just ground changing angle. Real corners (walls, ceilings)
+        // should still wedge normally; only skip it here while sliding across walkable-to-walkable
+        // ground, so the single-surface redirect below (which preserves speed) handles it instead.
+        bool wedgedBetweenWalkableGround =
+            sliding &&
+            IsWalkable(surfaceNormal) &&
+            previousNormal.HasValue &&
+            IsWalkable(previousNormal.Value);
+
         if (previousNormal.HasValue &&
-            Vector3.Dot(slidMotion, previousNormal.Value) < -0.0001f)
+            Vector3.Dot(slidMotion, previousNormal.Value) < -0.0001f &&
+            !wedgedBetweenWalkableGround)
         {
             // We hit two surfaces and are effectively wedged.
             SlideAlongCrease(previousNormal.Value, surfaceNormal, remainingMotion, ref slidMotion, ref calculatedMovement);
         }
         else if (Vector3.Dot(calculatedMovement, surfaceNormal) < 0f)
         {
+            float speedBeforeRedirect = calculatedMovement.magnitude;
+
             // If velocity points INTO the wall,
             // remove its wall-normal component.
             calculatedMovement = Vector3.ProjectOnPlane(calculatedMovement, surfaceNormal);
+
+            // Sliding onto a walkable ramp: keep our speed, just redirect it along the new surface.
+            // A plain projection bleeds off cos(angle) of our speed on contact (~23% on a 40 degree
+            // ramp), which reads as an instant wall hit even though we're still on the ground and
+            // still sliding. Normal running doesn't need this - groundAccel re-ramps you back up
+            // fast enough to hide it - but a slide has no re-acceleration, so the loss is permanent
+            // and obvious. Actual walls (not walkable) still bleed speed exactly as before.
+            if (sliding && IsWalkable(surfaceNormal) && calculatedMovement.sqrMagnitude > 0.0001f)
+                calculatedMovement = calculatedMovement.normalized * speedBeforeRedirect;
 
             if (steepUpward && calculatedMovement.y > 0f)
                 calculatedMovement.y = 0f;
