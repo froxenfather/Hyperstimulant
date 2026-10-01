@@ -70,8 +70,14 @@ public class CustomPlayerController : MonoBehaviour
     [Range(0f, 60f)]
     [SerializeField] private float slideBoostMaxSpeed = 25f;
 
-    // Can't start a slide slower than this, and a slide dies on the ground below it.
-    [SerializeField] private float slideMinSpeed = 5f;
+    // Minimum speed (m/s, same units as walkSpeed/sprintSpeed) needed to START a slide
+    // (grounded OR airborne). Too slow and we crouch instead.
+    [Range(0f, 30f)]
+    [SerializeField] private float slideMinSpeed = 6.7f;
+
+    // How strongly A/D nudge our direction while sliding. Way weaker than groundAccel - this is a
+    // slow drift, not steering like regular ground movement. W/S do nothing at all while sliding.
+    [SerializeField] private float slideSteerAccel = 10f;
 
     // Multiplier on gravity pulling us along a slope while sliding. 1 = plain g * sin(angle).
     [SerializeField] private float slideSlopeGravityScale = 1f;
@@ -82,6 +88,13 @@ public class CustomPlayerController : MonoBehaviour
 
     // Extra horizontal speed a slide jump gives.
     [SerializeField] private float slideJumpBoost = 8f;
+
+    [Header("Crouch")]
+    // What pressing slide does instead, if we're too slow to slide (or not moving at all).
+    [SerializeField] private float crouchSpeed = 5f;
+
+    // Capsule height while crouching. Standing height is read from the CapsuleCollider itself at Awake.
+    [SerializeField] private float crouchHeight = 1.2f;
 
     [Header("Collision")]
     [SerializeField] private LayerMask collisionMask = ~0;
@@ -173,6 +186,13 @@ public class CustomPlayerController : MonoBehaviour
     private bool slideHeld;
     private float slideStartTime = -999f;
 
+    // Crouch state. Crouching and sliding share the same button; only one is ever true at once.
+    private bool crouching;
+
+    // Standing capsule size, read once at Awake so crouching can restore it exactly.
+    private float standHeight;
+    private float standCenterY;
+
     private bool grounded;
     private Vector3 groundNormal = Vector3.up;
     private Collider groundCollider;
@@ -198,6 +218,7 @@ public class CustomPlayerController : MonoBehaviour
     public Vector3 Velocity => velocity;
     public bool IsGrounded => grounded;
     public bool IsSliding => sliding;
+    public bool IsCrouching => crouching;
 
     // Flat speed relative to whatever we're standing on, so riding a fast platform doesn't count as running.
     public float HorizontalSpeed => Flatten(velocity - currentPlatformVelocity).magnitude;
@@ -215,6 +236,9 @@ public class CustomPlayerController : MonoBehaviour
 
         position = transform.position;
         lastTarget = position;
+
+        standHeight = capsule.height;
+        standCenterY = capsule.center.y;
 
         CalculateMinGroundNormal();
     }
@@ -261,13 +285,16 @@ public class CustomPlayerController : MonoBehaviour
         if (startedGrounded)
             airSpeedCap = Mathf.Max(walkSpeed, Flatten(calculatedMovement).magnitude);
 
+        // Decide slide/crouch BEFORE jumping, so pressing slide and jump on the same frame
+        // still counts as a slide jump instead of missing it by one frame.
+        UpdateSlideAndCrouch(ref calculatedMovement, dt);
+
         // 1. Change velocity.
         // Leaving the ground can happen two ways: we jump, or the ground launches us.
         bool leftGround =
             Jump(ref calculatedMovement) ||
             LaunchOffMovingGround(calculatedMovement, dt);
 
-        Slide(ref calculatedMovement, dt);
         calculatedMovement = Move(calculatedMovement, dt);
 
         // 2. Change position.
@@ -395,7 +422,7 @@ public class CustomPlayerController : MonoBehaviour
     }
 
     // ============================================================
-    // VELOCITY STEPS: JUMP / SLIDE / MOVE
+    // VELOCITY STEPS: JUMP / SLIDE / CROUCH / MOVE
     // ============================================================
 
     // Returns true if we jumped (which means we left the ground this step).
@@ -411,6 +438,25 @@ public class CustomPlayerController : MonoBehaviour
         {
             // Jump is simply an immediate upward velocity assignment.
             calculatedMovement.y = jumpVelocity;
+            
+            // Pseudocode:
+            // - Only if `sliding` is true AND we're still within slideGrace seconds of
+            //   when the slide started (compare Time.time - slideStartTime against slideGrace):
+            //     - Add slideJumpBoost of speed to calculatedMovement, along the flattened
+            //       direction we're already moving (same trick as the slide's entry boost).
+            //     - Also raise airSpeedCap to match the new speed - it was captured BEFORE this
+            //       function ran this step, so without this the boost gets clamped away instantly.
+            // - Otherwise: nothing extra, this is just a plain jump.
+            if (sliding && (Time.time - slideStartTime) < slideGrace)
+            {
+                Vector3 flatDirection = Flatten(calculatedMovement).normalized;
+
+                calculatedMovement.x += flatDirection.x * slideJumpBoost;
+                calculatedMovement.z += flatDirection.z * slideJumpBoost;
+                
+                //Air Speed Change, Remove this in the future for design tweaking?
+                airSpeedCap = Flatten(calculatedMovement).magnitude;
+            }
 
             grounded = false;
             return true;
@@ -446,56 +492,92 @@ public class CustomPlayerController : MonoBehaviour
         return false;
     }
 
-    // Decides whether we are sliding this step. (The actual sliding physics comes in later stages.)
+    // Decides whether we're sliding or crouching this step. Pressing the button chooses between
+    // them based on how fast we're going; releasing it always ends whichever one we're in.
     //
-    // Plan:
-    // - Start a slide when the button is pressed, we are grounded, and we are fast enough.
-    // - Lower friction while sliding, but keep the momentum we came in with.
-    // - Speed up going downhill, slow down going uphill.
-    // - Let the player jump out of the slide (slide jump).
-    private void Slide(ref Vector3 calculatedMovement, float dt)
+    // (The actual slide/crouch movement math lives in SlideGroundMove/CrouchGroundMove below.)
+    private void UpdateSlideAndCrouch(ref Vector3 calculatedMovement, float dt)
     {
-        bool slidePressed = slideQueued;
+        bool pressed = slideQueued;
 
         // Used up either way, same as the jump press.
         slideQueued = false;
 
-        float flatSpeed = Flatten(calculatedMovement).magnitude;
+        float flatSpeed = calculatedMovement.magnitude;
 
-        if (!sliding)
+        if (pressed && !sliding && !crouching)
         {
-            // TODO 1 Start Slide
-            //
             // Pseudocode:
-            // - A slide starts only when ALL of these are true:
-            //     * the slide button was just pressed
-            //     * we are on the ground
-            //     * we are moving fast enough (slideMinSpeed)
-            //     * enough time has passed since the LAST slide started (slideGrace)
-            // - When it starts, remember it: turn sliding on, and store the time it began (slideStartTime).
+            // - If flatSpeed is at least slideMinSpeed (m/s, same units as walkSpeed/sprintSpeed)
+            //   AND enough time has passed since the LAST slide started
+            //   (compare Time.time - slideStartTime against slideGrace):
+            if ((flatSpeed >= slideMinSpeed && (Time.time - slideStartTime) >= slideGrace) || !grounded)
+            {
+                sliding = true;
+                slideStartTime = Time.time;
+                //boost
+                if (flatSpeed < slideBoostMaxSpeed)
+                {
+                    Vector3 flatDirection = Flatten(calculatedMovement).normalized;
+
+                    calculatedMovement.x += flatDirection.x * slideBoost;
+                    calculatedMovement.z += flatDirection.z * slideBoost;
+                }
+            }
+            
+            else {
+                if (grounded)
+                    crouching = true;
+            }
             //
-            // Hint: same shape as the multi-line if in TryStepUp. Time.time is the clock.
+            //     - Start a SLIDE: turn `sliding` on, set `slideStartTime = Time.time`.
+            //     - Give the entry boost: if flatSpeed is below slideBoostMaxSpeed, add `slideBoost`
+            //       of speed to calculatedMovement, along the flattened direction we're already moving.
+            //     - No grounded check here on purpose - this is allowed in midair too.
+            //
+            // - Otherwise, if we ARE grounded: start CROUCHING instead (turn `crouching` on).
+            //   (Too slow AND airborne falls through here too - there's no crouching in midair,
+            //   so just do nothing.)
         }
-        else
-        {
-            // TODO 2 End Slide
-            //
-            // Pseudocode:
-            // - The slide ends if EITHER of these is true:
-            //     * the button is no longer held (slideHeld)
-            //     * we are on the ground AND slower than slideMinSpeed
-            // - Ending it is just turning sliding back off.
-            //
-            // Question to think about: why "on the ground AND slower"? What would happen if we
-            // ended the slide for being slow while still in the air?
-        }
+
+        // Releasing the button always ends whichever state we're in. This is the ONLY way a slide
+        // ends now - you can slide to a dead stop on a ramp and keep sliding, backwards, once gravity
+        // starts winning.
+        if (sliding && !slideHeld)
+            sliding = false;
+
+        if (crouching && !slideHeld)
+            crouching = false;
+
+        SetCrouchHitbox(crouching);
     }
 
-    // Choose movement model based on grounded state.
+    // Shrinks or restores the capsule for crouching. Only the TOP moves - the bottom offset from
+    // the capsule's center stays fixed, so our feet never shift.
+    //
+    // Known limitation: no ceiling check when standing back up, so standing under something low
+    // can clip you into it for a frame until Depenetrate() sorts it out. Fine for v1.
+    private void SetCrouchHitbox(bool wantCrouching)
+    {
+        float targetHeight = wantCrouching ? crouchHeight : standHeight;
+
+        if (Mathf.Approximately(capsule.height, targetHeight))
+            return;
+
+        float bottomOffset = standCenterY - standHeight * 0.5f;
+
+        capsule.height = targetHeight;
+        capsule.center = new Vector3(capsule.center.x, targetHeight * 0.5f + bottomOffset, capsule.center.z);
+    }
+
+    // Choose movement model based on what state we're in.
     private Vector3 Move(Vector3 calculatedMovement, float dt)
     {
+        if (sliding)
+            return grounded ? SlideGroundMove(calculatedMovement, dt) : SlideAirMove(calculatedMovement, dt);
+
         if (grounded)
-            return GroundMove(calculatedMovement, dt);
+            return crouching ? CrouchGroundMove(calculatedMovement, dt) : GroundMove(calculatedMovement, dt);
 
         return AirMove(calculatedMovement, dt);
     }
@@ -522,16 +604,29 @@ public class CustomPlayerController : MonoBehaviour
 
     private Vector3 GroundMove(Vector3 calculatedMovement, float dt)
     {
-        Vector3 wish = WishDirection();
-
-        bool hasInput = wish.sqrMagnitude > 0.0001f;
-        bool inLandingGrace = Time.time - landTime < landingGrace;
-
         // target speed depends on if im sprinting or not
         float targetSpeed = walkSpeed;
 
         if (sprinting)
             targetSpeed = sprintSpeed;
+
+        return GroundMoveTowards(calculatedMovement, dt, targetSpeed);
+    }
+
+    private Vector3 CrouchGroundMove(Vector3 calculatedMovement, float dt)
+    {
+        // Crouching always moves at crouchSpeed - sprint does nothing while crouched.
+        return GroundMoveTowards(calculatedMovement, dt, crouchSpeed);
+    }
+
+    // Shared ground-acceleration model: approach targetSpeed along our wish direction,
+    // or apply friction when there's no input. Walking and crouch-walking only differ by targetSpeed.
+    private Vector3 GroundMoveTowards(Vector3 calculatedMovement, float dt, float targetSpeed)
+    {
+        Vector3 wish = WishDirection();
+
+        bool hasInput = wish.sqrMagnitude > 0.0001f;
+        bool inLandingGrace = Time.time - landTime < landingGrace;
 
         // Remove velocity pointing directly into/out of the ground.
 
@@ -572,6 +667,39 @@ public class CustomPlayerController : MonoBehaviour
             // v_new = MoveTowards(v, 0, friction * dt)
             velocityAlongGround = Vector3.MoveTowards(velocityAlongGround, Vector3.zero, groundFriction * dt);
         }
+
+        return velocityAlongGround;
+    }
+
+    // Sliding overrides normal ground movement entirely: W/S do nothing, A/D only steer weakly,
+    // and a slope's own gravity component speeds you up or slows you down.
+    private Vector3 SlideGroundMove(Vector3 calculatedMovement, float dt)
+    {
+        Vector3 velocityAlongGround = Vector3.ProjectOnPlane(calculatedMovement, groundNormal);
+
+        // Steer left/right while sliding: only moveInput.x matters, no forward/back from W/S.
+        // Added straight into velocityAlongGround like air control - a nudge over time,
+        // not a snap to a target speed.
+        Vector3 right = Flatten(transform.right).normalized;
+        velocityAlongGround += right * moveInput.x * slideSteerAccel * dt;
+        
+        // Pseudocode:
+        // - Find "downhill": project Vector3.down onto the ground plane (Vector3.ProjectOnPlane)
+        //   and normalize it. This points down the slope we're standing on.
+        // - Add to velocityAlongGround: downhill * gravity * sin(slopeAngle in RADIANS) * slideSlopeGravityScale * dt.
+        //   (slopeAngle is in degrees - Mathf.Sin wants radians, so multiply by Mathf.Deg2Rad first.)
+        // - Flat floor (slopeAngle = 0): sin(0) = 0, so this adds nothing.
+        // - Sliding DOWN a slope: downhill points the way you're already going, so this speeds you up.
+        // - Sliding UP a slope (say, into one from flat ground): downhill points backward, so this
+        //   slows you down, and can eventually push you back down it.
+
+        Vector3 downhill = Vector3.ProjectOnPlane(Vector3.down, groundNormal).normalized;
+
+        velocityAlongGround += downhill * gravity * Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * slideSlopeGravityScale * dt;
+        
+        // Slide friction always applies, on top of everything above - this is what finally
+        // brings a slide to a stop (very slowly, since slidingGroundFriction is low).
+        velocityAlongGround = Vector3.MoveTowards(velocityAlongGround, Vector3.zero, slidingGroundFriction * dt);
 
         return velocityAlongGround;
     }
@@ -622,6 +750,14 @@ public class CustomPlayerController : MonoBehaviour
         calculatedMovement += Vector3.down * gravity * dt;
         // Gotta be careful to not clamp gravity here!
 
+        return calculatedMovement;
+    }
+
+    // Sliding in midair means momentum is locked in: no steering, no speed caps, just gravity.
+    // (You get here by jumping out of a slide, or sliding off a ledge, with the button still held.)
+    private Vector3 SlideAirMove(Vector3 calculatedMovement, float dt)
+    {
+        calculatedMovement += Vector3.down * gravity * dt;
         return calculatedMovement;
     }
 
@@ -1352,7 +1488,7 @@ public class CustomPlayerController : MonoBehaviour
             $"speed: {velocity.magnitude:F1}   horizontal: {horizontalVelocity.magnitude:F1}\n" +
             $"velocity: {velocity}\n" +
             $"grounded: {grounded}   slope: {slopeAngle:F0} deg\n" +
-            $"sliding: {sliding}\n" +
+            $"sliding: {sliding}   crouching: {crouching}\n" +
             $"platform: {platformName}"
         );
     }

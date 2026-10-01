@@ -847,6 +847,7 @@ GameObject:
   - component: {fileID: 450152361}
   - component: {fileID: 450152364}
   - component: {fileID: 450152365}
+  - component: {fileID: 450152366}
   m_Layer: 0
   m_Name: Player
   m_TagString: Untagged
@@ -960,12 +961,15 @@ MonoBehaviour:
   maxAirSpeed: 20
   airOverspeedDecel: 15
   slidingGroundFriction: 4
-  slideBoost: 5
-  slideBoostMaxSpeed: 25
-  slideMinSpeed: 5
+  slideBoost: 3
+  slideBoostMaxSpeed: 26
+  slideMinSpeed: 15
+  slideSteerAccel: 10
   slideSlopeGravityScale: 1
   slideGrace: 0.5
-  slideJumpBoost: 8
+  slideJumpBoost: 5
+  crouchSpeed: 5
+  crouchHeight: 1.2
   collisionMask:
     serializedVersion: 2
     m_Bits: 503
@@ -980,6 +984,27 @@ MonoBehaviour:
   pushStrength: 1
   showDebugHUD: 1
   drawDebugRays: 1
+--- !u!114 &450152366
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 450152358}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 022e96c6483840e4c9477b3aeaf36789, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SlideVisuals
+  player: {fileID: 450152365}
+  cameraPivot: {fileID: 62238683}
+  model: {fileID: 1839950789}
+  slideCameraHeight: 0.7
+  crouchCameraHeight: 1
+  slideCameraSpeed: 8
+  slideTiltAngle: 75
+  slideModelPivotHeight: 1.1
+  tiltSpeed: 540
 --- !u!1 &467874651
 GameObject:
   m_ObjectHideFlags: 0
