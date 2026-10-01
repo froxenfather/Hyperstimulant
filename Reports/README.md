@@ -49,3 +49,22 @@
 ## 9/21/2026
 - Evil Script from Hell!
 - Finished Creation of objects in game.
+
+## 9/22/2026
+- Began Refactoring Movement Engine to Custom Controller
+
+## 9/23/2026
+- Finished WASD Jump movement- VERY jank
+- Gravity (Easy)
+
+## 9/24/2026
+- Friction and Acceleration Finished
+
+## 9/25/2026
+- Ramp Implementations Finished
+
+## 9/26/2026-9/28/26
+- Launch Pads, Ramp Finishing Touches, Moving Platforms. Engine is Finished!!!
+
+## 9/29/2026
+- Finishing Sliding... Its not going well!
