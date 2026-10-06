@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: understand what normalizing a vector does —
-// direction keeps distance baked in, normalizedDirection has magnitude 1.
+// Learning Objective: understand what normalizing a vector does — direction keeps distance baked in, normalizedDirection has magnitude 1.
 public class Exp03_VectorNormalization : MonoBehaviour
 {
     [SerializeField] private Transform target;

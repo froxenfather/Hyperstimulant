@@ -1,8 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// Learning Objective: model gravity as acceleration applied directly to a
-// Transform - no Rigidbody, no physics engine. You own every step of
+// Learning Objective: model gravity as acceleration applied directly to a Transform - no Rigidbody, no physics engine. You own every step of
 // acceleration -> velocity -> position yourself (Euler integration).
 // Requires: just a Transform (no Rigidbody, no Collider needed).
 public class Exp15_ManualGravity : MonoBehaviour

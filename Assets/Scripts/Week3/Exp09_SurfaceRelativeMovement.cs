@@ -1,8 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// Learning Objective: combine input + surface normal to move along angled geometry
-// (flat ground, 15/30/45 degree ramps) without the projected vector losing speed.
+// Learning Objective: combine input + surface normal to move along angled geometry (flat ground, 15/30/45 degree ramps) without the projected vector losing speed.
 public class Exp09_SurfaceRelativeMovement : MonoBehaviour
 {
     [SerializeField] private float moveSpeed = 4f;

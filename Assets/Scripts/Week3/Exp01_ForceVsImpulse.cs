@@ -1,8 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// Learning Objective: understand the difference between a continuous Force,
-// an instant Impulse, and directly setting velocity.
+// Learning Objective: understand the difference between a continuous Force, an instant Impulse, and directly setting velocity.
 // Controls: Up arrow = up force, Left arrow = forward force, Right arrow = forward impulse, Down arrow = reset.
 public class Exp01_ForceVsImpulse : MonoBehaviour
 {

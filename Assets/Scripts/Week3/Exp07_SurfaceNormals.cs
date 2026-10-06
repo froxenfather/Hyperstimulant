@@ -1,8 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: a surface normal points perpendicular away from a surface,
-// and its real job is splitting an incoming velocity into "into the surface" and
-// "along the surface" parts.
+// Learning Objective: a surface normal points perpendicular away from a surface, and its real job is splitting an incoming velocity into "into the surface" and "along the surface" parts.
 // Place this on a tester above Ramp_15 / Ramp_30 / Ramp_45 and compare results.
 public class Exp07_SurfaceNormals : MonoBehaviour
 {

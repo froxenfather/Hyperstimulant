@@ -4,8 +4,7 @@ using UnityEngine.InputSystem;
 // STRETCH EXPERIMENT (do only after the core experiments are done).
 // Learning Objective: on a ramp, gravity's pull ALONG the surface is g * sin(slope).
 // Steeper ramp -> faster acceleration down; sliding up a ramp slows you down.
-// Requires: a ramp Collider below (no Rigidbody on this object). Place it on
-// Ramp_15 / Ramp_30 / Ramp_45 and compare. This is NOT the final slide system.
+// Requires: a ramp Collider below (no Rigidbody on this object). Place it on Ramp_15 / Ramp_30 / Ramp_45 and compare. This is NOT the final slide system.
 //
 // this fucker took me an entire night. ramps werent even equal length.
 // gravity got added twice. seam ate velocity.y on steep ramps. and i was measuring distance from the wrong point the whole time. pool balls fixed me.
@@ -47,8 +46,7 @@ public class EVIL_script_from_hell : MonoBehaviour
             rampExitPosition = null;
         }
 
-        // ONLY place gravity gets added. do not add a second sin(theta) kick
-        // below, the projection already handles that. doubled it once, never again
+        // ONLY place gravity gets added. do not add a second sin(theta) kick below, the projection already handles that. doubled it once, never again
         velocity += Vector3.down * gravity * Time.deltaTime;
 
         Vector3 feetPosition = transform.position + Vector3.down * halfHeight; // actual bottom, not the pivot
@@ -122,10 +120,7 @@ public class EVIL_script_from_hell : MonoBehaviour
     }
 }
 
-// lets be PERCFECTLY CLEAR HERE
-// this is FINE
-// games should NOT be realistic
-// they should FEEL GOOD
+// lets be PERCFECTLY CLEAR HERE this is FINE games should NOT be realistic they should FEEL GOOD
 // GOODNIGHT
 
 // SLOPE SLIDE FORMULA, for the record

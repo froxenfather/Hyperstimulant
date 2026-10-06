@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: build the habit of visualizing invisible math,
-// gated behind Inspector toggles so only what you need is drawn.
+// Learning Objective: build the habit of visualizing invisible math, gated behind Inspector toggles so only what you need is drawn.
 public class Exp14_VisualDebuggingLab : MonoBehaviour
 {
     [Header("Toggles")]
@@ -31,8 +30,7 @@ public class Exp14_VisualDebuggingLab : MonoBehaviour
 
         if (showGroundRay || showSurfaceNormal)
         {
-            // TODO: raycast down once, then draw the ray and/or the hit normal
-            // depending on which toggles are enabled.
+            // TODO: raycast down once, then draw the ray and/or the hit normal depending on which toggles are enabled.
             // Pseudocode:
             //   - fire one raycast straight down out to groundRayDistance, note whether it hit
             //   - if showGroundRay is on and it hit, draw the ray out to the hit distance

@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: understand how a raycast detects geometry
-// (origin, direction, max distance, layer mask, RaycastHit).
+// Learning Objective: understand how a raycast detects geometry (origin, direction, max distance, layer mask, RaycastHit).
 public class Exp06_RaycastBasics : MonoBehaviour
 {
     [SerializeField] private float maxDistance = 5f;

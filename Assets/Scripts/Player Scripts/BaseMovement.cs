@@ -93,8 +93,7 @@ public class PlayerMovement : MonoBehaviour
             {
                 Vector3 targetVel = moveDirection * targetSpeed;
 
-                // Gentler rate when we're already over target (came in hot from a
-                // boost / air landing) than when accelerating up to it.
+                // Gentler rate when we're already over target (came in hot from a boost / air landing) than when accelerating up to it.
                 float rate = horiz.magnitude > targetSpeed
                     ? groundOverspeedDecel
                     : groundAccel;
@@ -108,8 +107,7 @@ public class PlayerMovement : MonoBehaviour
             else if (!inLandingGrace)
             {
                 // High groundFriction -> decelerates very quickly to a stop
-                // (near-instant, but still frame-rate independent). Suppressed
-                // during the landing grace window so jump momentum carries.
+                // (near-instant, but still frame-rate independent). Suppressed during the landing grace window so jump momentum carries.
                 horiz = Vector3.MoveTowards(
                     horiz,
                     Vector3.zero,

@@ -12,8 +12,7 @@ public class Exp04_DotProduct : MonoBehaviour
     {
         if (target == null) return;
 
-        // TODO: compute the dot product between this object's forward and the
-        // normalized direction to the target.
+        // TODO: compute the dot product between this object's forward and the normalized direction to the target.
         // Pseudocode:
         //   - get the normalized direction from this object to the target
         //   - take the dot product of this object's forward vector and that

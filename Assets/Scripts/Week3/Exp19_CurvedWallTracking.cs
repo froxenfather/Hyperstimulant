@@ -2,11 +2,8 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 // Learning Objective: follow a curved wall (cylinder) using only the hit normal.
-// A non-Rigidbody object travels along the wall's tangent, re-casting toward the
-// wall every frame. Toggle the stick force to see why straight-line motion drifts
-// off a curve, and toggle speed preservation to see reprojection slow you down.
-// Requires: a vertical Cylinder with a Collider. Start this object near it,
-// at torso height, a bit away from the surface. No Rigidbody on this object.
+// A non-Rigidbody object travels along the wall's tangent, re-casting toward the wall every frame. Toggle the stick force to see why straight-line motion drifts off a curve, and toggle speed preservation to see reprojection slow you down.
+// Requires: a vertical Cylinder with a Collider. Start this object near it, at torso height, a bit away from the surface. No Rigidbody on this object.
 public class Exp19_CurvedWallTracking : MonoBehaviour
 {
     [SerializeField] private float runSpeed = 6f;
@@ -36,8 +33,7 @@ public class Exp19_CurvedWallTracking : MonoBehaviour
             attached = false;
         }
 
-        // Attach: press Space to cast toward the wall. Set your start facing so
-        // transform.forward points at the cylinder. Detach: press E.
+        // Attach: press Space to cast toward the wall. Set your start facing so transform.forward points at the cylinder. Detach: press E.
         if (!attached && Keyboard.current.spaceKey.wasPressedThisFrame)
         {
             if (Physics.SphereCast(transform.position, castRadius, transform.forward, out RaycastHit attachHit, castDistance))

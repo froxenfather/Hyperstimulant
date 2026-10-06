@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: bring raycasts, surface normals, slope angle, and projection
-// together. Put one of these on (or above) each of Ramp_15 / Ramp_30 / Ramp_45.
+// Learning Objective: bring raycasts, surface normals, slope angle, and projection together. Put one of these on (or above) each of Ramp_15 / Ramp_30 / Ramp_45.
 public class Exp13_RampComparisonTest : MonoBehaviour
 {
     [SerializeField] private Transform rayOrigin;

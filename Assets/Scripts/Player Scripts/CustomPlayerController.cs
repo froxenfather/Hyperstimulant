@@ -59,6 +59,11 @@ public class CustomPlayerController : MonoBehaviour
     // High = acts like a hard clamp, low = momentum carries through the air.
     [SerializeField] private float airOverspeedDecel = 52.1f;
 
+    // Coyote time: for this many seconds after walking off an edge, pressing jump still counts as a normal ground jump.
+    // Named after the cartoon coyote who hangs in the air before falling. Just saw Coyote Vs Acme and was reminded of this!
+    // 0 turns it off. Around 0.1 feels forgiving without looking like a double jump.
+    [SerializeField] private float coyoteTime = 0.1f;
+
     [Header("Slide")]
     // Friction while sliding. Way lower than groundFriction so momentum carries.
     [SerializeField] private float slidingGroundFriction = 4f;
@@ -70,21 +75,18 @@ public class CustomPlayerController : MonoBehaviour
     [Range(0f, 60f)]
     [SerializeField] private float slideBoostMaxSpeed = 25f;
 
-    // Minimum speed (m/s, same units as walkSpeed/sprintSpeed) needed to START a slide
-    // (grounded OR airborne). Too slow and we crouch instead.
+    // Minimum speed (m/s, same units as walkSpeed/sprintSpeed) needed to START a slide (grounded OR airborne). Too slow and we crouch instead.
     [Range(0f, 30f)]
     [SerializeField] private float slideMinSpeed = 6.7f;
 
-    // How strongly A/D nudge our direction while sliding. Way weaker than groundAccel - this is a
-    // slow drift, not steering like regular ground movement. W/S do nothing at all while sliding.
+    // How strongly A/D nudge our direction while sliding. Way weaker than groundAccel - this is a slow drift, not steering like regular ground movement. W/S do nothing at all while sliding.
     [SerializeField] private float slideSteerAccel = 10f;
 
     // Multiplier on gravity pulling us DOWN a slope while sliding. 1 = plain g * sin(angle).
     [SerializeField] private float slideSlopeGravityScale = 1f;
 
     // Same, but for slowing us down going UP a slope. Lower than slideSlopeGravityScale on purpose:
-    // full gravity uphill kills speed just as hard as it builds it downhill, which eats the exact
-    // momentum you need to carry over a lip and launch. Feel over realism.
+    // full gravity uphill kills speed just as hard as it builds it downhill, which eats the exact momentum you need to carry over a lip and launch. Feel over realism.
     [Range(0f, 1f)]
     [SerializeField] private float slideUphillGravityScale = 0.35f;
 
@@ -94,6 +96,33 @@ public class CustomPlayerController : MonoBehaviour
 
     // Extra horizontal speed a slide jump gives.
     [SerializeField] private float slideJumpBoost = 8f;
+
+    [Header("Wall Jump")]
+    // Upward speed of a wall jump, as a fraction of jumpVelocity. 0.66 = two thirds of a normal jump.
+    [Range(0f, 1.5f)]
+    [SerializeField] private float wallJumpHeightMultiplier = 0.66f;
+
+    // Flat speed added straight away from the wall (along the wall normal).
+    [SerializeField] private float wallJumpPushAway = 10f;
+
+    // Flat speed added along the wall, in the direction we're facing.
+    // Defaults to the same value as slideJumpBoost.
+    [SerializeField] private float wallJumpForwardBoost = 8f;
+
+    // How far off "looking parallel to the wall" we can be and still wall jump. Applies to BOTH directions along the wall, so 30 gives a 60 degree cone around each one.
+    [Range(0f, 90f)]
+    [SerializeField] private float wallJumpLookTolerance = 30f;
+
+    // How close (meters, from the capsule surface, on top of skinWidth) a wall must be to count.
+    [SerializeField] private float wallDetectDistance = 0.15f;
+
+    // How many horizontal directions we probe around the capsule. More = catches walls at odd angles better.
+    [Range(4, 16)]
+    [SerializeField] private int wallProbeDirections = 8;
+
+    // A surface only counts as a wall if abs(normal.y) is at most this. 0 = perfectly vertical.
+    [Range(0f, 1f)]
+    [SerializeField] private float wallMaxNormalY = 0.3f;
 
     [Header("Crouch")]
     // What pressing slide does instead, if we're too slow to slide (or not moving at all).
@@ -131,6 +160,9 @@ public class CustomPlayerController : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool showDebugHUD = true;
     [SerializeField] private bool drawDebugRays = true;
+
+    // Value for lastGroundedTime meaning "no coyote jump available". Far enough in the past to never match.
+    private const float NeverGrounded = -999f;
 
     // Anything shorter than this counts as "not moving".
     private const float MinMoveDistance = 0.0001f;
@@ -199,11 +231,32 @@ public class CustomPlayerController : MonoBehaviour
     private float standHeight;
     private float standCenterY;
 
+    // Everything we know about the wall we're next to. Single source of truth: wall jump and the debug rays read it, and a future wall run can too (it just needs its own state + a branch in Move()).
+    // Detection and the look check live ONLY in the WALL DETECTION section, filled by UpdateWallContact().
+    // A plain struct (small value type), so copying it to re-check the look doesn't touch the stored one.
+    private struct WallContact
+    {
+        public bool valid;
+        public Vector3 normal;          // flat, points away from the wall
+        public Vector3 point;
+        public Collider collider;
+        public Vector3 tangent;         // along the wall (the -tangent is the other way)
+        public Vector3 forwardTangent;  // whichever of +/- tangent we're facing more
+        public float lookAngle;         // degrees between our flat look and forwardTangent
+        public bool lookOk;             // lookAngle within wallJumpLookTolerance
+    }
+
+    private WallContact currentWall;
+
     private bool grounded;
     private Vector3 groundNormal = Vector3.up;
     private Collider groundCollider;
     private float slopeAngle;
     private float landTime = -999f;
+
+    // The last time we ended a physics step standing on something. Coyote time counts from here.
+    // -999 means "we are not allowed a coyote jump right now" (same trick as slideStartTime).
+    private float lastGroundedTime = NeverGrounded;
 
     // Minimum Y component a surface normal needs to count as walkable.
     private float minGroundNormalY;
@@ -260,8 +313,7 @@ public class CustomPlayerController : MonoBehaviour
         ReadInput();
     }
 
-    // Everything the controller does each physics step, in order.
-    // Read this function top to bottom to see the whole controller.
+    // Everything the controller does each physics step, in order so just read this function top to bottom to see the whole controller.
     private void FixedUpdate()
     {
         float dt = Time.fixedDeltaTime;
@@ -275,11 +327,8 @@ public class CustomPlayerController : MonoBehaviour
         Depenetrate();
 
         // Movement logic should happen RELATIVE to the platform.
-        //
         // playerVelocity = relativeVelocity + platformVelocity
-        //
-        // Therefore:
-        //
+        // Therefore
         // relativeVelocity = playerVelocity - platformVelocity
         Vector3 calculatedMovement = velocity - currentPlatformVelocity;
 
@@ -291,32 +340,31 @@ public class CustomPlayerController : MonoBehaviour
         if (startedGrounded)
             airSpeedCap = Mathf.Max(walkSpeed, Flatten(calculatedMovement).magnitude);
 
-        // Decide slide/crouch BEFORE jumping, so pressing slide and jump on the same frame
-        // still counts as a slide jump instead of missing it by one frame.
+        // Decide slide/crouch BEFORE jumping, so pressing slide and jump on the same frame still counts as a slide jump instead of missing it by one frame.
         UpdateSlideAndCrouch(ref calculatedMovement, dt);
 
-        // 1. Change velocity.
-        // Leaving the ground can happen two ways: we jump, or the ground launches us.
+        // Change velocity.
+        // Leaving the ground can happen two ways: we jump, or the ground launches us (like if you fly off a platform or launchpad) (falling off a platform also counts)
         bool leftGround =
-            Jump(ref calculatedMovement) ||
-            LaunchOffMovingGround(calculatedMovement, dt);
+            Jump(ref calculatedMovement) || LaunchOffMovingGround(calculatedMovement, dt);
 
         calculatedMovement = Move(calculatedMovement, dt);
 
-        // 2. Change position.
-        //
+        // Change position.
         // displacement = velocity * time
-        //
         // x_new = x_old + v * dt
         MoveAndSlide(calculatedMovement * dt, ref calculatedMovement, startedGrounded && !leftGround);
 
-        // 3. Work out where we ended up.
+        // 3. then work out where we ended up.
         UpdateGrounded(startedGrounded, leftGround, calculatedMovement);
 
-        // Convert relative velocity back into world velocity.
+        // make sure we remember any wall we're next to, for the next step's wall jump (and the debug rays).
+        UpdateWallContact();
+
+        // convert relative velocity back into world velocity.
         velocity = calculatedMovement + currentPlatformVelocity;
 
-        // 4. Tell the world about it, and remember things for next step.
+        // Tell the surrounding  world about it, and remember things for next step.
         DispatchContacts();
         RecordPlatformAnchor();
         CommitPosition();
@@ -335,7 +383,7 @@ public class CustomPlayerController : MonoBehaviour
     private void SetupRigidbody()
     {
         // Rigidbody exists as a Unity physics shell.
-        // Our code remains responsible for actual movement.
+        // but the code remains responsible for actual movement.
 
         // better to set these here so we dont untick them ingame yknow?
         rb.isKinematic = true;
@@ -361,8 +409,7 @@ public class CustomPlayerController : MonoBehaviour
 
     private void AcceptExternalMovement()
     {
-        // If another system moved the Rigidbody unexpectedly,
-        // accept that new position instead of snapping back.
+        // If another system moved the Rigidbody unexpectedly, accept that new position instead of snapping back.
         // Helpful trigger for doors shoving you or platforms moving you!
         if ((rb.position - lastTarget).sqrMagnitude > ExternalMoveThresholdSqr)
             position = rb.position;
@@ -416,8 +463,7 @@ public class CustomPlayerController : MonoBehaviour
         if (keyboard.spaceKey.wasPressedThisFrame)
             jumpQueued = true;
 
-        // Slide is on either thumb button of the mouse. Same queue trick as jump for the press,
-        // and a plain "is it down" for holding the slide.
+        // Slide is on either thumb button of the mouse. Same queue trick as jump for the press, and a plain "is it down" for holding the slide.
         Mouse mouse = Mouse.current;
         if (mouse == null) return;
 
@@ -431,48 +477,130 @@ public class CustomPlayerController : MonoBehaviour
     // VELOCITY STEPS: JUMP / SLIDE / CROUCH / MOVE
     // ============================================================
 
-    // Returns true if we jumped (which means we left the ground this step).
+    // All hail the jump button lol.
+    // Returns true if we jumped OFF THE GROUND (which means we left the ground this step). A wall jump happens in the air, not a jump like this
+    
+    // Which jump we get, in priority order:
+    //   1. Ground jump  - standing on something, OR still inside the coyote window after walking off.
+    //   2. Wall jump    - airborne, next to a wall, looking roughly along it.
+    //   3. Nothing      - pressing jump in mid-air with no wall does nothing.
+    //
+    // Each kind of jump is its own method, so future ones (wall run jump, etc.) get their own method and one more branch here instead of growing one enormous conditional.
     private bool Jump(ref Vector3 calculatedMovement)
     {
         bool jumpPressed = jumpQueued;
 
-        // The queued press is used up either way, so pressing Space
-        // in mid-air does not secretly "buffer" a jump for later.
+        // The queued press is used up either way, so pressing Space in mid-air does not secretly "buffer" a jump for later.
         jumpQueued = false;
 
-        if (jumpPressed && grounded)
-        {
-            // Jump is simply an immediate upward velocity assignment.
-            calculatedMovement.y = jumpVelocity;
-            
-            // Pseudocode:
-            // - Only if `sliding` is true AND we're still within slideGrace seconds of
-            //   when the slide started (compare Time.time - slideStartTime against slideGrace):
-            //     - Add slideJumpBoost of speed to calculatedMovement, along the flattened
-            //       direction we're already moving (same trick as the slide's entry boost).
-            //     - Also raise airSpeedCap to match the new speed - it was captured BEFORE this
-            //       function ran this step, so without this the boost gets clamped away instantly.
-            // - Otherwise: nothing extra, this is just a plain jump.
-            if (sliding && (Time.time - slideStartTime) < slideGrace)
-            {
-                Vector3 flatDirection = Flatten(calculatedMovement).normalized;
+        if (!jumpPressed)
+            return false;
 
-                calculatedMovement.x += flatDirection.x * slideJumpBoost;
-                calculatedMovement.z += flatDirection.z * slideJumpBoost;
-                
-                //Air Speed Change, Remove this in the future for design tweaking?
-                airSpeedCap = Flatten(calculatedMovement).magnitude;
-            }
+        // Ground first, so near a ledge AND a wall you get the stronger ground jump.
+        if (grounded || InCoyoteWindow())
+            return PerformGroundJump(ref calculatedMovement);
 
-            grounded = false;
-            return true;
-        }
-
+        // Wall jumps are airborne already, so they are NOT "leaving the ground":
+        // returning false keeps UpdateGrounded probing for a landing like any other airborne step.
+        TryWallJump(ref calculatedMovement);
         return false;
     }
 
-    // A platform that stops (or slows down) faster than gravity can pull us
-    // back down leaves us flying with the speed it had.
+    // Coyote time: true if we were standing on something a split second ago, even though we are airborne now (we walked off an edge without jumping). Lets a slightly-late press still jump.
+    // lastGroundedTime is set back to "never" whenever we leave the ground ON PURPOSE (a jump or a launch), so this can only be true after simply walking/falling off something.
+    // Without that jumping would leave the window open and you could jump a second time in mid-air.
+    private bool InCoyoteWindow()
+    {
+        return Time.time - lastGroundedTime <= coyoteTime;
+    }
+
+    // Normal jump, plus the slide jump boost. Always succeeds, so always returns true.
+    // Also what a coyote jump does: it is exactly the same jump, we just allow it a bit late.
+    private bool PerformGroundJump(ref Vector3 calculatedMovement)
+    {
+        // Jump is simply an immediate upward velocity assignment.
+        // (In a coyote jump we may have already started falling - this overwrites that fall.)
+        calculatedMovement.y = jumpVelocity;
+
+        // Pseudocode:
+        // - Only if `sliding` is true AND we're still within slideGrace seconds of when the slide started (compare Time.time - slideStartTime against slideGrace):
+        //     - Add slideJumpBoost of speed to calculatedMovement, along the flattened
+        //       direction we're already moving (same trick as the slide's entry boost).
+        //     - Also raise airSpeedCap to match the new speed - it was captured BEFORE this
+        //       function ran this step, so without this the boost gets clamped away instantly.
+        // - Otherwise: nothing extra, this is just a plain jump.
+        if (sliding && (Time.time - slideStartTime) < slideGrace)
+        {
+            Vector3 flatDirection = Flatten(calculatedMovement).normalized;
+
+            calculatedMovement.x += flatDirection.x * slideJumpBoost;
+            calculatedMovement.z += flatDirection.z * slideJumpBoost;
+
+            // Air Speed Change, Remove this in the future for design tweaking?
+            airSpeedCap = Flatten(calculatedMovement).magnitude;
+        }
+
+        grounded = false;
+
+        // We left on purpose, so close the coyote window: no second jump in mid-air.
+        lastGroundedTime = NeverGrounded;
+
+        return true;
+    }
+
+    // Wall jump: needs an airborne player next to a wall they're looking roughly along.
+    // Returns true if the jump happened.
+    //
+    // Flow (same order as the spec's flowchart):
+    //   grounded?            -> no wall jump (the ground jump handles it)
+    //   wall in range?       -> currentWall.valid, found by UpdateWallContact() last step
+    //   looking along it?    -> within wallJumpLookTolerance of either direction along the wall
+    //   all yes              -> ApplyWallJump
+    private bool TryWallJump(ref Vector3 calculatedMovement)
+    {
+        if (grounded || !currentWall.valid)
+            return false;
+
+        // currentWall was measured at the end of the last physics step, but the mouse can turn us between steps. Copy it and re-check just the look part against where we face right now.
+        WallContact wall = currentWall;
+        EvaluateWallLook(ref wall);
+
+        if (!wall.lookOk)
+            return false;
+
+        ApplyWallJump(wall, ref calculatedMovement);
+        return true;
+    }
+
+    // The wall jump's velocity change, three parts:
+    //   1. UP:         jumpVelocity * wallJumpHeightMultiplier (default 66% of a normal jump).
+    //   2. AWAY:       wallJumpPushAway along the wall normal.
+    //   3. FORWARD:    wallJumpForwardBoost along the wall, in the direction we're facing.
+    //
+    // The flat parts are ADDED to the velocity we already have (not replaced), exactly like the slide jump boost.
+    // Deterministic: the result only depends on current velocity + the wall.
+    private void ApplyWallJump(WallContact wall, ref Vector3 calculatedMovement)
+    {
+        // Like any jump, upward speed is assigned, not added - so a wall jump always gives the same height no matter how fast we were falling.
+        calculatedMovement.y = jumpVelocity * wallJumpHeightMultiplier;
+
+        // Both vectors are flat (normal and forwardTangent have no height), so this is purely sideways.
+        Vector3 boost =
+            wall.normal * wallJumpPushAway +
+            wall.forwardTangent * wallJumpForwardBoost;
+
+        calculatedMovement.x += boost.x;
+        calculatedMovement.z += boost.z;
+
+        // Same reason as the slide jump: airSpeedCap was captured before this function ran, and AirMove would clamp the boost away on the very next line. Max() so it can never LOWER the cap.
+        airSpeedCap = Mathf.Max(airSpeedCap, Flatten(calculatedMovement).magnitude);
+
+        // A wall jump ends an air slide (SlideAirMove would lock our momentum and ignore air control).
+        // Pressing slide again starts a new one as normal - air slides ignore slideGrace.
+        sliding = false;
+    }
+
+    // A platform that stops (or slows down) faster than gravity can pull us back down leaves us flying with the speed it had.
     // Same idea as the old Rigidbody version launching you at the apex.
     //
     // Returns true if we launched (which means we left the ground this step).
@@ -483,8 +611,7 @@ public class CustomPlayerController : MonoBehaviour
 
         // How fast we are moving AWAY from the ground we stand on.
         //
-        // When a platform stops, its old speed shows up in
-        // calculatedMovement (velocity - platformVelocity), pointing away from it.
+        // When a platform stops, its old speed shows up in calculatedMovement (velocity - platformVelocity), pointing away from it.
         float speedAwayFromGround = Vector3.Dot(calculatedMovement, groundNormal);
 
         // Gravity can only pull us back by gravity * dt each step.
@@ -492,15 +619,17 @@ public class CustomPlayerController : MonoBehaviour
         if (speedAwayFromGround > gravity * dt)
         {
             grounded = false;
+
+            // Launched on purpose, not walked off: no coyote jump (same reason as PerformGroundJump).
+            lastGroundedTime = NeverGrounded;
             return true;
         }
 
         return false;
     }
 
-    // Decides whether we're sliding or crouching this step. Pressing the button chooses between
-    // them based on how fast we're going; releasing it always ends whichever one we're in.
-    //
+    // Decides whether we're sliding or crouching this step.
+    // Pressing the button chooses between them based on how fast we're going; releasing it always ends whichever one we're in.
     // (The actual slide/crouch movement math lives in SlideGroundMove/CrouchGroundMove below.)
     private void UpdateSlideAndCrouch(ref Vector3 calculatedMovement, float dt)
     {
@@ -521,7 +650,7 @@ public class CustomPlayerController : MonoBehaviour
             {
                 sliding = true;
                 slideStartTime = Time.time;
-                //boost
+                // boost
                 if (flatSpeed < slideBoostMaxSpeed)
                 {
                     Vector3 flatDirection = Flatten(calculatedMovement).normalized;
@@ -546,9 +675,7 @@ public class CustomPlayerController : MonoBehaviour
             //   so just do nothing.)
         }
 
-        // Releasing the button always ends whichever state we're in. This is the ONLY way a slide
-        // ends now - you can slide to a dead stop on a ramp and keep sliding, backwards, once gravity
-        // starts winning.
+        // Releasing the button always ends whichever state we're in. This is the ONLY way a slide ends now - you can slide to a dead stop on a ramp and keep sliding, backwards, once gravity starts winning.
         if (sliding && !slideHeld)
             sliding = false;
 
@@ -558,11 +685,9 @@ public class CustomPlayerController : MonoBehaviour
         SetCrouchHitbox(crouching);
     }
 
-    // Shrinks or restores the capsule for crouching. Only the TOP moves - the bottom offset from
-    // the capsule's center stays fixed, so our feet never shift.
+    // Shrinks or restores the capsule for crouching. Only the TOP moves - the bottom offset from the capsule's center stays fixed, so our feet never shift.
     //
-    // Known limitation: no ceiling check when standing back up, so standing under something low
-    // can clip you into it for a frame until Depenetrate() sorts it out. Fine for v1.
+    // Known limitation: no ceiling check when standing back up, so standing under something low can clip you into it for a frame until Depenetrate() sorts it out. Fine for v1.
     private void SetCrouchHitbox(bool wantCrouching)
     {
         float targetHeight = wantCrouching ? crouchHeight : standHeight;
@@ -625,8 +750,7 @@ public class CustomPlayerController : MonoBehaviour
         return GroundMoveTowards(calculatedMovement, dt, crouchSpeed);
     }
 
-    // Shared ground-acceleration model: approach targetSpeed along our wish direction,
-    // or apply friction when there's no input. Walking and crouch-walking only differ by targetSpeed.
+    // Shared ground-acceleration model: approach targetSpeed along our wish direction, or apply friction when there's no input. Walking and crouch-walking only differ by targetSpeed.
     private Vector3 GroundMoveTowards(Vector3 calculatedMovement, float dt, float targetSpeed)
     {
         Vector3 wish = WishDirection();
@@ -644,7 +768,7 @@ public class CustomPlayerController : MonoBehaviour
 
         if (hasInput)
         {
-            //Arguably the coolest and smoothest model I have here!
+            // Arguably the coolest and smoothest model I have here!
             // Project desired movement onto the slope.
             //
             // This means "forward" becomes "forward along the ramp."
@@ -677,23 +801,20 @@ public class CustomPlayerController : MonoBehaviour
         return velocityAlongGround;
     }
 
-    // Sliding overrides normal ground movement entirely: W/S do nothing, A/D only steer weakly,
-    // and a slope's own gravity component speeds you up or slows you down.
+    // Sliding overrides normal ground movement entirely: W/S do nothing, A/D only steer weakly, and a slope's own gravity component speeds you up or slows you down.
     private Vector3 SlideGroundMove(Vector3 calculatedMovement, float dt)
     {
         Vector3 velocityAlongGround = Vector3.ProjectOnPlane(calculatedMovement, groundNormal);
 
         // Steer left/right while sliding: only moveInput.x matters, no forward/back from W/S.
-        // Added straight into velocityAlongGround like air control - a nudge over time,
-        // not a snap to a target speed.
+        // Added straight into velocityAlongGround like air control - a nudge over time, not a snap to a target speed.
         float speedBeforeSteer = velocityAlongGround.magnitude;
 
         Vector3 right = Flatten(transform.right).normalized;
         velocityAlongGround += right * moveInput.x * slideSteerAccel * dt;
 
         // Steering can only turn us, never speed us up - same idea as AirMove's airSpeedCap.
-        // Capping against speedBeforeSteer (not some fixed number) means this can't be used to
-        // climb from a dead stop back up to speed either - 0 can only clamp back down to 0.
+        // Capping against speedBeforeSteer (not some fixed number) means this can't be used to climb from a dead stop back up to speed either - 0 can only clamp back down to 0.
         if (velocityAlongGround.magnitude > speedBeforeSteer)
             velocityAlongGround = velocityAlongGround.normalized * speedBeforeSteer;
 
@@ -710,15 +831,13 @@ public class CustomPlayerController : MonoBehaviour
 
         Vector3 downhill = Vector3.ProjectOnPlane(Vector3.down, groundNormal).normalized;
 
-        // Moving against downhill means we're climbing - that case gets its own, gentler scale
-        // (see slideUphillGravityScale) instead of reusing the downhill one for both directions.
+        // Moving against downhill means we're climbing - that case gets its own, gentler scale (see slideUphillGravityScale) instead of reusing the downhill one for both directions.
         bool movingUphill = Vector3.Dot(velocityAlongGround, downhill) < 0f;
         float slopeScale = movingUphill ? slideUphillGravityScale : slideSlopeGravityScale;
 
         velocityAlongGround += downhill * gravity * Mathf.Sin(slopeAngle * Mathf.Deg2Rad) * slopeScale * dt;
 
-        // Slide friction always applies, on top of everything above - this is what finally
-        // brings a slide to a stop (very slowly, since slidingGroundFriction is low).
+        // Slide friction always applies, on top of everything above - this is what finally brings a slide to a stop (very slowly, since slidingGroundFriction is low).
         velocityAlongGround = Vector3.MoveTowards(velocityAlongGround, Vector3.zero, slidingGroundFriction * dt);
 
         return velocityAlongGround;
@@ -842,8 +961,7 @@ public class CustomPlayerController : MonoBehaviour
         bool foundHit = false;
         float closestDistance = float.MaxValue;
 
-        // CapsuleCastNonAlloc is not guaranteed to return sorted hits,
-        // so manually find the nearest collision.
+        // CapsuleCastNonAlloc is not guaranteed to return sorted hits, so manually find the nearest collision.
         for (int i = 0; i < hitCount; i++)
         {
             RaycastHit candidate = hitBuffer[i];
@@ -895,8 +1013,7 @@ public class CustomPlayerController : MonoBehaviour
 
     private void Depenetrate()
     {
-        // Repeat a few times because resolving one overlap
-        // can sometimes push us into another surface.
+        // Repeat a few times because resolving one overlap can sometimes push us into another surface.
         for (int iteration = 0; iteration < 3; iteration++)
         {
             GetCapsulePoints(position, out Vector3 p0, out Vector3 p1, out float radius);
@@ -1068,8 +1185,7 @@ public class CustomPlayerController : MonoBehaviour
         if (steepUpward && slidMotion.y > 0f)
             slidMotion.y = 0f;
 
-        // A floor seaming into a walkable ramp (or ramp into another ramp) registers as TWO hits in
-        // one step - the old surface's edge, then the new one - which looks like being wedged in a
+        // A floor seaming into a walkable ramp (or ramp into another ramp) registers as TWO hits in one step - the old surface's edge, then the new one - which looks like being wedged in a
         // corner even though it's still just ground changing angle. Real corners (walls, ceilings)
         // should still wedge normally; only skip it here while sliding across walkable-to-walkable
         // ground, so the single-surface redirect below (which preserves speed) handles it instead.
@@ -1090,16 +1206,11 @@ public class CustomPlayerController : MonoBehaviour
         {
             float speedBeforeRedirect = calculatedMovement.magnitude;
 
-            // If velocity points INTO the wall,
-            // remove its wall-normal component.
+            // If velocity points INTO the wall, remove its wall-normal component.
             calculatedMovement = Vector3.ProjectOnPlane(calculatedMovement, surfaceNormal);
 
             // Sliding onto a walkable ramp: keep our speed, just redirect it along the new surface.
-            // A plain projection bleeds off cos(angle) of our speed on contact (~23% on a 40 degree
-            // ramp), which reads as an instant wall hit even though we're still on the ground and
-            // still sliding. Normal running doesn't need this - groundAccel re-ramps you back up
-            // fast enough to hide it - but a slide has no re-acceleration, so the loss is permanent
-            // and obvious. Actual walls (not walkable) still bleed speed exactly as before.
+            // A plain projection bleeds off cos(angle) of our speed on contact (~23% on a 40 degree ramp), which reads as an instant wall hit even though we're still on the ground and still sliding. Normal running doesn't need this - groundAccel re-ramps you back up fast enough to hide it - but a slide has no re-acceleration, so the loss is permanent and obvious. Actual walls (not walkable) still bleed speed exactly as before.
             if (sliding && IsWalkable(surfaceNormal) && calculatedMovement.sqrMagnitude > 0.0001f)
                 calculatedMovement = calculatedMovement.normalized * speedBeforeRedirect;
 
@@ -1112,8 +1223,7 @@ public class CustomPlayerController : MonoBehaviour
 
     // Wedged between two surfaces: only keep motion along the line where they meet.
     //
-    // Their cross product creates a vector pointing
-    // along the line where the two planes intersect.
+    // Their cross product creates a vector pointing along the line where the two planes intersect.
     //
     // crease = n1 x n2
     private void SlideAlongCrease(
@@ -1241,9 +1351,7 @@ public class CustomPlayerController : MonoBehaviour
 
         // Ramp launching:
         //
-        // If our slope-projected velocity points upward and
-        // the old slope was sufficiently steep, we should
-        // continue through the air instead of being snapped downward.
+        // If our slope-projected velocity points upward and the old slope was sufficiently steep, we should continue through the air instead of being snapped downward.
         bool launching =
             wasGrounded &&
             calculatedMovement.y > MinLaunchUpSpeed &&
@@ -1253,9 +1361,7 @@ public class CustomPlayerController : MonoBehaviour
             wasGrounded &&
             !launching;
 
-        // Since the capsule touches angled ground at an offset,
-        // skinWidth / normal.y roughly converts the desired
-        // perpendicular skin gap into the needed vertical clearance.
+        // Since the capsule touches angled ground at an offset, skinWidth / normal.y roughly converts the desired perpendicular skin gap into the needed vertical clearance.
         float probeDistance = skinWidth / minGroundNormalY + groundProbeDistance;
 
         // Only reach far downward when we intend to stick to the ground.
@@ -1271,8 +1377,7 @@ public class CustomPlayerController : MonoBehaviour
         if (!IsWalkable(surfaceNormal))
             return;
 
-        // dot(calculatedMovement, surfaceNormal) > 0 means velocity is moving AWAY
-        // from the surface along its normal.
+        // dot(calculatedMovement, surfaceNormal) > 0 means velocity is moving AWAY from the surface along its normal.
         //
         // So don't instantly reground while launching.
         if (!snapping &&
@@ -1290,6 +1395,9 @@ public class CustomPlayerController : MonoBehaviour
         grounded = true;
         groundNormal = surfaceNormal;
         groundCollider = groundHit.collider;
+
+        // Every step we end on the ground refreshes the coyote window. The moment we stop being grounded this stops updating, so Time.time - lastGroundedTime starts counting up.
+        lastGroundedTime = Time.time;
 
         // Angle between surface normal and straight up.
         //
@@ -1313,6 +1421,203 @@ public class CustomPlayerController : MonoBehaviour
         groundCollider = null;
         groundNormal = Vector3.up;
         slopeAngle = 0f;
+    }
+
+    // ============================================================
+    // WALL DETECTION
+    // ============================================================
+
+    // Looks for a wall next to us and stores what it finds in currentWall. Runs once at the end of every physics step, so TryWallJump (next step) and the debug rays share the same answer.
+    //
+    // Why not just use the hits MoveAndSlide already finds? MoveAndSlide only sweeps in the direction we are MOVING. Wall jumps want us moving ALONG the wall, so we would almost never actually "hit" it. Instead we reuse the same SweepCapsule, but aimed sideways around us.
+    private void UpdateWallContact()
+    {
+        // Start empty every step so an old wall can never linger after we move away from it.
+        currentWall = default;
+
+        // Walls only matter in the air. A grounded player has the normal ground jump instead.
+        if (grounded)
+            return;
+
+        if (!TryFindWall(out WallContact wall))
+            return;
+
+        // Work out the tangents and whether we're looking along the wall.
+        EvaluateWallLook(ref wall);
+        currentWall = wall;
+    }
+
+    // Sweeps the capsule outward in a ring of horizontal directions and picks the closest real wall.
+    //
+    // Top-down view, wallProbeDirections = 8 (each arrow is one short capsule sweep):
+    //
+    //        \  |  /
+    //         \ | /
+    //      <----(O)---->     O = player capsule
+    //         / | \
+    //        /  |  \
+    //
+    // The ring is built from angles, never from world axes, so the wall can face any direction.
+    // A wall facing between two probes is still caught: the sweep reaches further than the gap we keep from walls (skinWidth), with a bit of room to spare.
+    private bool TryFindWall(out WallContact wall)
+    {
+        wall = default;
+
+        bool found = false;
+        float closestDistance = float.MaxValue;
+        RaycastHit closestHit = default;
+
+        // Fewer than 4 probes would leave big blind spots.
+        int directions = Mathf.Max(wallProbeDirections, 4);
+
+        for (int i = 0; i < directions; i++)
+        {
+            // Spin "forward" around the up axis: i = 0 is world forward, then evenly around the circle.
+            Vector3 direction = Quaternion.Euler(0f, 360f * i / directions, 0f) * Vector3.forward;
+
+            // skinWidth is added because we already hold that gap away from surfaces, so wallDetectDistance means "how far past our normal gap" we still count.
+            if (!SweepCapsule(position, direction, wallDetectDistance + skinWidth, out RaycastHit hit))
+                continue;
+
+            // Only the closest hit matters, and only if it is actually wall-shaped (this skips floors, ceilings and walkable slopes we happened to graze).
+            if (hit.distance >= closestDistance || !IsWallNormal(hit.normal))
+                continue;
+
+            closestHit = hit;
+            closestDistance = hit.distance;
+            found = true;
+        }
+
+        if (!found)
+            return false;
+
+        // The capsule's own hit normal can be wrong near corners and edges (it may report the direction toward the capsule's rounded end). Ask the surface itself instead.
+        Vector3 normal = ResolveWallNormal(closestHit);
+
+        // Re-check with the corrected normal: the better answer might not be a wall after all.
+        if (!IsWallNormal(normal))
+            return false;
+
+        // Flatten: we only care which HORIZONTAL way the wall faces.
+        // A normal with no horizontal part is a floor or ceiling - not a wall.
+        Vector3 flatNormal = Flatten(normal);
+
+        if (flatNormal.sqrMagnitude < 0.0001f)
+            return false;
+
+        flatNormal.Normalize();
+
+        wall.valid = true;
+        wall.normal = flatNormal;
+        wall.point = closestHit.point;
+        wall.collider = closestHit.collider;
+
+        // The direction ALONG the wall: the normal turned 90 degrees around the up axis.
+        //
+        // cross(up, normal) is perpendicular to both, so it lies flat in the wall's plane:
+        //
+        //    wall normal = (0, 0, 1)  ->  tangent = cross(up, normal) = (1, 0, 0)
+        //
+        // It works for walls rotated to ANY angle, which is the whole reason we use a cross product instead of hardcoding "left/right" in world space.
+        // The opposite way along the wall is simply -tangent.
+        wall.tangent = Vector3.Cross(Vector3.up, flatNormal).normalized;
+
+        return true;
+    }
+
+    // A wall is a surface that is mostly vertical and not something we could stand on.
+    //
+    // normal.y is 0 for a perfectly vertical wall, 1 for a flat floor, -1 for a flat ceiling, so abs() lets one check reject both floors AND ceilings.
+    private bool IsWallNormal(Vector3 surfaceNormal)
+    {
+        return Mathf.Abs(surfaceNormal.y) <= wallMaxNormalY && !IsWalkable(surfaceNormal);
+    }
+
+    // Same idea as ResolveGroundNormal: capsule hits can lie about the normal near edges, so shoot a plain ray at the contact point and use the surface normal it reports.
+    private Vector3 ResolveWallNormal(RaycastHit hit)
+    {
+        GetCapsulePoints(position, out Vector3 p0, out Vector3 p1, out _);
+
+        // The capsule's center line runs p0 -> p1. Find the point on it closest to the contact
+        // (a "closest point on a segment" projection, clamped so it stays between p0 and p1).
+        // Shooting from there makes the ray travel straight at the wall at the contact's height.
+        Vector3 axis = p1 - p0;
+
+        float along = axis.sqrMagnitude > 0.0001f
+            ? Mathf.Clamp01(Vector3.Dot(hit.point - p0, axis) / axis.sqrMagnitude)
+            : 0f;
+
+        Vector3 origin = p0 + axis * along;
+
+        Vector3 toContact = hit.point - origin;
+        float distance = toContact.magnitude;
+
+        // Contact is on top of our center line: no direction to shoot in, trust the capsule.
+        if (distance < 0.0001f)
+            return hit.normal;
+
+        // Overshoot by a little so the ray reliably reaches the surface.
+        // Must hit the SAME collider, or we might read a different object's normal.
+        if (Physics.Raycast(
+                origin,
+                toContact / distance,
+                out RaycastHit rayHit,
+                distance + NormalProbeHeight,
+                collisionMask,
+                QueryTriggerInteraction.Ignore)
+            && rayHit.collider == hit.collider)
+        {
+            return rayHit.normal;
+        }
+
+        return hit.normal;
+    }
+
+    // Fills in lookAngle / forwardTangent / lookOk from where we are facing RIGHT NOW.
+    //
+    // Top-down, wall along the bottom, tolerance = 30:
+    //
+    //              (normal points up, away from the wall)
+    //                      ^
+    //                      |
+    //     ok cone  \       |       /  ok cone
+    //     (-tangent) \     |     /    (+tangent)
+    //   <---------------- wall ---------------->
+    //
+    // The ok zone is a cone of +/- tolerance around EACH direction along the wall, so with 30 degrees that is two 60 degree cones, one per direction.
+    //
+    // Rules:
+    //  - Only our flat (yaw) direction counts. Looking up or down changes nothing.
+    //  - We compare against the wall's tangent and -tangent, and keep the closer one.
+    //    We never compare against the normal: the spec wants "looking ALONG the wall".
+    private void EvaluateWallLook(ref WallContact wall)
+    {
+        // Same flat look direction WishDirection uses for "forward".
+        Vector3 look = Flatten(transform.forward);
+
+        // No wall, or looking dead up/down so there is no flat direction: nothing to compare.
+        // 180 is the worst possible angle, so this can never pass.
+        if (!wall.valid || look.sqrMagnitude < 0.0001f)
+        {
+            wall.lookAngle = 180f;
+            wall.lookOk = false;
+            wall.forwardTangent = wall.tangent;
+            return;
+        }
+
+        look.Normalize();
+
+        // Angle() is always 0-180, between two directions, so we need both ways along the wall.
+        // Example: facing 20 degrees off +tangent is 160 degrees off -tangent. Take the smaller.
+        float anglePositive = Vector3.Angle(look, wall.tangent);
+        float angleNegative = Vector3.Angle(look, -wall.tangent);
+
+        bool facingPositive = anglePositive <= angleNegative;
+
+        // forwardTangent is "the way along the wall we're heading" - the wall jump boosts us that way, and a future wall run would run that way too.
+        wall.forwardTangent = facingPositive ? wall.tangent : -wall.tangent;
+        wall.lookAngle = facingPositive ? anglePositive : angleNegative;
+        wall.lookOk = wall.lookAngle <= wallJumpLookTolerance;
     }
 
     // ============================================================
@@ -1346,8 +1651,7 @@ public class CustomPlayerController : MonoBehaviour
         //
         // μ = (m1 * m2) / (m1 + m2)
         //
-        // This gives realistic collision response between
-        // two objects of different mass.
+        // This gives realistic collision response between two objects of different mass.
         float reducedMass = (playerMass * body.mass) / (playerMass + body.mass);
 
         // Impulse:
@@ -1377,13 +1681,11 @@ public class CustomPlayerController : MonoBehaviour
 
         // platformLocalPos stores our anchor relative to the platform.
         //
-        // TransformPoint converts that old local anchor into
-        // its NEW world position.
+        // TransformPoint converts that old local anchor into its NEW world position.
         //
         // Therefore:
         //
-        // platformDelta =
-        // newAnchorWorldPosition - playerPosition
+        // platformDelta = newAnchorWorldPosition - playerPosition
         Vector3 platformDelta = platform.TransformPoint(platformLocalPos) - position;
 
         if (platformDelta.sqrMagnitude < 0.0000000001f)
@@ -1438,8 +1740,7 @@ public class CustomPlayerController : MonoBehaviour
 
         // Convert player world position into platform-local coordinates.
         //
-        // This anchor will move naturally when the
-        // platform translates or rotates.
+        // This anchor will move naturally when the platform translates or rotates.
         platformLocalPos = platform.InverseTransformPoint(position);
 
         platformLastRot = platform.rotation;
@@ -1480,12 +1781,14 @@ public class CustomPlayerController : MonoBehaviour
 
         grounded = false;
         platform = null;
+
+        // Launched by something else (launch pad): no coyote jump.
+        lastGroundedTime = NeverGrounded;
     }
 
     public void Teleport(Vector3 worldPosition)
     {
-        // Synchronize every representation of position
-        // so the controller doesn't snap back afterward.
+        // Synchronize every representation of position so the controller doesn't snap back afterward.
         position = worldPosition;
         lastTarget = worldPosition;
 
@@ -1493,6 +1796,10 @@ public class CustomPlayerController : MonoBehaviour
 
         grounded = false;
         platform = null;
+
+        // Teleporting doesn't count as walking off an edge.
+        lastGroundedTime = NeverGrounded;
+        currentWall = default;
 
         rb.position = worldPosition;
         transform.position = worldPosition;
@@ -1512,6 +1819,37 @@ public class CustomPlayerController : MonoBehaviour
 
         // Cyan = velocity.
         Debug.DrawRay(position + Vector3.up, velocity * 0.15f, Color.cyan);
+
+        DrawWallDebugRays();
+    }
+
+    // Shows why a wall jump would be accepted or rejected. Reads currentWall, same as the jump does, but re-checks the look so the colours follow the mouse between physics steps.
+    private void DrawWallDebugRays()
+    {
+        if (!currentWall.valid)
+            return;
+
+        WallContact wall = currentWall;
+        EvaluateWallLook(ref wall);
+
+        Vector3 origin = position + Vector3.up * 1f;
+        Color verdict = wall.lookOk ? Color.green : Color.red;
+
+        // Magenta = wall normal.
+        Debug.DrawRay(origin, wall.normal * 1.5f, Color.magenta);
+
+        // The tangent we're facing is green (passes) or red (fails); the other one is yellow.
+        Debug.DrawRay(origin, wall.forwardTangent * 2f, verdict);
+        Debug.DrawRay(origin, -wall.forwardTangent * 2f, Color.yellow);
+
+        // Edges of the allowed cone around the facing tangent, in white.
+        Quaternion tolerance = Quaternion.AngleAxis(wallJumpLookTolerance, Vector3.up);
+        Quaternion toleranceBack = Quaternion.AngleAxis(-wallJumpLookTolerance, Vector3.up);
+        Debug.DrawRay(origin, tolerance * wall.forwardTangent * 1.5f, Color.white);
+        Debug.DrawRay(origin, toleranceBack * wall.forwardTangent * 1.5f, Color.white);
+
+        // Blue = our flattened look direction.
+        Debug.DrawRay(origin, Flatten(transform.forward).normalized * 2f, Color.blue);
     }
 
     private void DrawDebugHUD()
@@ -1526,13 +1864,25 @@ public class CustomPlayerController : MonoBehaviour
         if (platform != null)
             platformName = platform.name;
 
+        string wallText = "none";
+
+        if (currentWall.valid)
+        {
+            WallContact wall = currentWall;
+            EvaluateWallLook(ref wall);
+            wallText = $"{(wall.lookOk ? "OK" : "blocked")}  look angle: {wall.lookAngle:F0} deg";
+        }
+
         GUI.Label(
-            new Rect(10f, 10f, 420f, 160f),
+            new Rect(10f, 10f, 420f, 200f),
             $"speed: {velocity.magnitude:F1}   horizontal: {horizontalVelocity.magnitude:F1}\n" +
             $"velocity: {velocity}\n" +
             $"grounded: {grounded}   slope: {slopeAngle:F0} deg\n" +
             $"sliding: {sliding}   crouching: {crouching}\n" +
-            $"platform: {platformName}"
+            $"platform: {platformName}\n" +
+            $"coyote left: {Mathf.Max(0f, coyoteTime - (Time.time - lastGroundedTime)):F2}s (window {coyoteTime:F2}s)\n" +
+            $"wall: {wallText}"
         );
     }
 }
+;

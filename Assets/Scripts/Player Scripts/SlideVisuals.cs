@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Lowers the camera and tilts the body model while sliding. Rough/placeholder - doesn't need to
-// look good, just needs to read as "the character is sliding" from third person.
+// Lowers the camera and tilts the body model while sliding. Rough/placeholder - doesn't need to look good, just needs to read as "the character is sliding" from third person.
 // Put this on the Player object, next to CustomPlayerController.
 public class SlideVisuals : MonoBehaviour
 {
@@ -52,8 +51,7 @@ public class SlideVisuals : MonoBehaviour
     {
         float targetAngle = player.IsSliding ? slideTiltAngle : 0f;
 
-        // localEulerAngles wraps to 0-360, so convert to a -180..180 range before easing toward a target
-        // that might be "behind" 0 (otherwise MoveTowardsAngle can spin the long way around).
+        // localEulerAngles wraps to 0-360, so convert to a -180..180 range before easing toward a target that might be "behind" 0 (otherwise MoveTowardsAngle can spin the long way around).
         float currentAngle = model.localEulerAngles.x;
         if (currentAngle > 180f)
             currentAngle -= 360f;

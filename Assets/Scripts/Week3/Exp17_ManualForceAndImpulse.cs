@@ -45,9 +45,7 @@ public class Exp17_ManualForceAndImpulse : MonoBehaviour
         Vector3 nextPosition = transform.position + velocity * Time.deltaTime;
         Vector3 feetPosition = transform.position + Vector3.down * halfHeight;
 
-        // Scale how far we look for ground by how far we're about to fall this
-        // frame - a fixed small window can't catch a fast fall before it
-        // overshoots, which is what causes the "snap" onto the surface.
+        // Scale how far we look for ground by how far we're about to fall this frame - a fixed small window can't catch a fast fall before it overshoots, which is what causes the "snap" onto the surface.
         float fallDistanceThisFrame = Mathf.Max(-velocity.y * Time.deltaTime, 0f);
         float castDistance = Mathf.Max(groundCheckDistance, fallDistanceThisFrame) + skinWidth;
 

@@ -67,4 +67,18 @@
 - Launch Pads, Ramp Finishing Touches, Moving Platforms. Engine is Finished!!!
 
 ## 9/29/2026
-- Finishing Sliding... Its not going well!
+-  Sliding... Its not going well!
+
+## 9/30/2026- 10/1/2026
+- Tweaking sliding, ramp behavior and friction to make the game feel better and smoother
+
+## 10/2/2026
+- Wall Jumping
+  - Syste, refactor and helper function coding
+
+## 10/3/2026
+- Wall Jumping
+  - Testing Thoreticals from Week 3
+
+## 10/4/2026
+- Crude implementation finished

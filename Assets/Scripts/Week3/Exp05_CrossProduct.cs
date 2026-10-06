@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: the cross product of two vectors returns a vector
-// perpendicular to both — useful for finding a direction along a surface.
+// Learning Objective: the cross product of two vectors returns a vector perpendicular to both — useful for finding a direction along a surface.
 public class Exp05_CrossProduct : MonoBehaviour
 {
     [SerializeField] private float rayLength = 3f;

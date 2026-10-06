@@ -1,7 +1,6 @@
 using UnityEngine;
 
-// Learning Objective: Vector3.ProjectOnPlane removes the portion of a vector
-// that points into a surface, leaving a vector that lies along it.
+// Learning Objective: Vector3.ProjectOnPlane removes the portion of a vector that points into a surface, leaving a vector that lies along it.
 public class Exp08_VectorProjection : MonoBehaviour
 {
     [SerializeField] private Vector3 movementDirection = Vector3.forward;
