@@ -6,20 +6,21 @@ using UnityEngine.InputSystem;
 // Setup:
 // Kinematic Rigidbody + CapsuleCollider on Player root.
 // Feet are assumed to sit at the object's pivot.
-//
+// Camera tied to head
 // Controller philosophy:
 // - Rigidbody does NOT drive movement.
-// - We manually integrate velocity.
+// - We manually integrate velocity accel etc thru good ol math
 // - Capsule sweeps detect collisions before movement.
 // - Collisions are resolved using "collide and slide".
 // - Kinematic Rigidbody mainly exists for:
 //      1. Trigger interactions
-//      2. Rigidbody interpolation
-//
-// This is essentially a custom kinetic character controller.
+//      2. Rigidbody interpolation 
+//      3. punching objects and such!
 
 // Ladies and Gentlemen
 // the FRAGNUM OPUS!
+
+// Warning: This is a LOT of code. Explanations for the functions in detail are found in Research/How It Works
 [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
 public class CustomPlayerController : MonoBehaviour
 {
@@ -87,8 +88,10 @@ public class CustomPlayerController : MonoBehaviour
 
     // Same, but for slowing us down going UP a slope. Lower than slideSlopeGravityScale on purpose:
     // full gravity uphill kills speed just as hard as it builds it downhill, which eats the exact momentum you need to carry over a lip and launch. Feel over realism.
+    // But too low and two ramps facing each other become a perpetual motion machine: going down gains more than going up loses, so every pass through the valley is faster than the last.
+    // Rule of thumb: keep this at about 0.77 or more while slidingGroundFriction is 4 and gravity is 40, and a valley can never gain speed on any walkable slope.
     [Range(0f, 1f)]
-    [SerializeField] private float slideUphillGravityScale = 0.35f;
+    [SerializeField] private float slideUphillGravityScale = 0.8f;
 
     // One shared timer, counted from the start of a slide:
     // no new slide can start before it runs out, and a jump inside it is a slide jump.
@@ -96,6 +99,14 @@ public class CustomPlayerController : MonoBehaviour
 
     // Extra horizontal speed a slide jump gives.
     [SerializeField] private float slideJumpBoost = 8f;
+
+    // Landing on the ground while sliding in the air turns some of the fall speed into forward speed.
+    // This is how much of it we keep: 1 = all of it (the old, very strong boost), 0 = none (a plain landing).
+    [Range(0f, 1f)]
+    [SerializeField] private float slideLandingBoostScale = 0.35f;
+
+    // Hard cap (m/s) on that landing boost, so a very tall drop can't launch you.
+    [SerializeField] private float slideLandingBoostMax = 12f;
 
     [Header("Wall Jump")]
     // Upward speed of a wall jump, as a fraction of jumpVelocity. 0.66 = two thirds of a normal jump.
@@ -1139,16 +1150,15 @@ public class CustomPlayerController : MonoBehaviour
     // Returns whatever motion is still left over.
     private Vector3 MoveUpToHit(RaycastHit hit, Vector3 direction, float distance)
     {
-        // Move slightly short of the collision. More math time
-        //
+        // Move slightly short of the collision  More math time
+        
         // dot(direction, normal) tells us how directly we're approaching the surface.
-        //
+        
         // Head-on collision:
-        // dot ~= -1
-        //
+        // dot ~= -1 ish
+        
         // Grazing collision:
-        // dot ~= 0
-        //
+        // dot ~= 0 ish
         // More grazing -> slightly larger backoff needed.
         float backOffDistance = Mathf.Min(skinWidth / Mathf.Max(0.05f, -Vector3.Dot(direction, hit.normal)), skinWidth * 4f);
 
@@ -1212,7 +1222,20 @@ public class CustomPlayerController : MonoBehaviour
             // Sliding onto a walkable ramp: keep our speed, just redirect it along the new surface.
             // A plain projection bleeds off cos(angle) of our speed on contact (~23% on a 40 degree ramp), which reads as an instant wall hit even though we're still on the ground and still sliding. Normal running doesn't need this - groundAccel re-ramps you back up fast enough to hide it - but a slide has no re-acceleration, so the loss is permanent and obvious. Actual walls (not walkable) still bleed speed exactly as before.
             if (sliding && IsWalkable(surfaceNormal) && calculatedMovement.sqrMagnitude > 0.0001f)
-                calculatedMovement = calculatedMovement.normalized * speedBeforeRedirect;
+            {
+                // After the projection above, calculatedMovement is the plain along-the-surface speed.
+                float tangentSpeed = calculatedMovement.magnitude;
+
+                // The speed that was pointing INTO the surface. Keeping it is what stops a ramp transition from bleeding speed.
+                float extraSpeed = speedBeforeRedirect - tangentSpeed;
+
+                // grounded still holds last step's value here (Jump and launches clear it, UpdateGrounded runs later), so false means we are landing from the air.
+                // Ground to ground keeps all of it. Landing from the air only keeps a capped fraction of the fall speed, otherwise a tall drop turns into a huge horizontal boost.
+                if (!grounded)
+                    extraSpeed = Mathf.Min(extraSpeed * slideLandingBoostScale, slideLandingBoostMax);
+
+                calculatedMovement = calculatedMovement.normalized * (tangentSpeed + extraSpeed);
+            }
 
             if (steepUpward && calculatedMovement.y > 0f)
                 calculatedMovement.y = 0f;
