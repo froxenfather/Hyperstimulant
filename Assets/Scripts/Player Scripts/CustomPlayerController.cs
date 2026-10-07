@@ -332,6 +332,8 @@ public class CustomPlayerController : MonoBehaviour
         AcceptExternalMovement();
 
         // First inherit motion from whatever platform we stand on.
+        // (currentPlatformVelocity still holds LAST step's value until the line below overwrites it, so grab it first: LaunchOffMovingGround needs to know how much speed the platform lost.)
+        Vector3 previousPlatformVelocity = currentPlatformVelocity;
         currentPlatformVelocity = ApplyPlatformCarry(dt);
 
         // Fix any overlap caused by moving platforms, teleports, etc.
@@ -357,7 +359,7 @@ public class CustomPlayerController : MonoBehaviour
         // Change velocity.
         // Leaving the ground can happen two ways: we jump, or the ground launches us (like if you fly off a platform or launchpad) (falling off a platform also counts)
         bool leftGround =
-            Jump(ref calculatedMovement) || LaunchOffMovingGround(calculatedMovement, dt);
+            Jump(ref calculatedMovement) || LaunchOffMovingGround(previousPlatformVelocity - currentPlatformVelocity, dt);
 
         calculatedMovement = Move(calculatedMovement, dt);
 
@@ -615,15 +617,17 @@ public class CustomPlayerController : MonoBehaviour
     // Same idea as the old Rigidbody version launching you at the apex.
     //
     // Returns true if we launched (which means we left the ground this step).
-    private bool LaunchOffMovingGround(Vector3 calculatedMovement, float dt)
+    private bool LaunchOffMovingGround(Vector3 platformVelocityLost, float dt)
     {
         if (!grounded)
             return false;
 
-        // How fast we are moving AWAY from the ground we stand on.
+        // How fast the ground just moved AWAY from us.
         //
-        // When a platform stops, its old speed shows up in calculatedMovement (velocity - platformVelocity), pointing away from it.
-        float speedAwayFromGround = Vector3.Dot(calculatedMovement, groundNormal);
+        // When a platform stops, the speed it had shows up in our platform-relative velocity (velocity - platformVelocity), pointing away from it. platformVelocityLost (last step's platform velocity minus this step's) is exactly that amount.
+        //
+        // We deliberately do NOT use our own velocity here: walking off a ledge makes the capsule touch the edge, which gives a tilted "walkable" ground normal pointing the way we are walking. Our own speed lined up with that normal looked like the ground launching us and wiped the coyote window.
+        float speedAwayFromGround = Vector3.Dot(platformVelocityLost, groundNormal);
 
         // Gravity can only pull us back by gravity * dt each step.
         // Moving away faster than that means the ground let go of us.

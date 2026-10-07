@@ -955,23 +955,25 @@ MonoBehaviour:
   airControl: 50
   maxAirSpeed: 20
   airOverspeedDecel: 15
-  coyoteTime: 1.4
+  coyoteTime: 0.3
   slidingGroundFriction: 4
   slideBoost: 3
   slideBoostMaxSpeed: 26
   slideMinSpeed: 15
   slideSteerAccel: 15
   slideSlopeGravityScale: 1
-  slideUphillGravityScale: 0.35
+  slideUphillGravityScale: 0.8
   slideGrace: 0.5
   slideJumpBoost: 5
+  slideLandingBoostScale: 0.5
+  slideLandingBoostMax: 100
   wallJumpHeightMultiplier: 1
   wallJumpPushAway: 10
   wallJumpForwardBoost: 3
   wallJumpLookTolerance: 30
   wallDetectDistance: 0.15
   wallProbeDirections: 8
-  wallMaxNormalY: 0.3
+  wallMaxNormalY: 0.25
   crouchSpeed: 5
   crouchHeight: 1.2
   collisionMask:
@@ -984,8 +986,8 @@ MonoBehaviour:
   groundProbeDistance: 0.05
   launchSlopeAngle: 20
   maxBumps: 4
-  playerMass: 1
-  pushStrength: 30
+  playerMass: 2
+  pushStrength: 2
   showDebugHUD: 1
   drawDebugRays: 1
 --- !u!114 &450152366
@@ -2298,7 +2300,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7162162377198911445, guid: 729f73d4d997fda4fbd35da48cd7a99e, type: 3}
       propertyPath: m_LocalScale.x
-      value: 2.8022604
+      value: 10.616083
       objectReference: {fileID: 0}
     - target: {fileID: 7162162377198911445, guid: 729f73d4d997fda4fbd35da48cd7a99e, type: 3}
       propertyPath: m_LocalScale.y
@@ -3102,7 +3104,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7162162377198911445, guid: 729f73d4d997fda4fbd35da48cd7a99e, type: 3}
       propertyPath: m_LocalScale.x
-      value: 2.8022604
+      value: 19.980118
       objectReference: {fileID: 0}
     - target: {fileID: 7162162377198911445, guid: 729f73d4d997fda4fbd35da48cd7a99e, type: 3}
       propertyPath: m_LocalScale.y
